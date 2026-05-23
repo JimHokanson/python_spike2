@@ -31,7 +31,15 @@ from datetime import datetime
 
 #Third
 #--------------------------
-from sonpy import lib as sp
+#This is in flux ...
+try:
+    from sonpy import lib as sp
+except ImportError:
+    try:
+        #New format from May 2026
+        import sonpy as sp
+    except ImportError:
+        raise ImportError("Could not import sonpy. Please install it with: pip install sonpy")
 
 
 #Local
@@ -316,19 +324,44 @@ class ADC(Channel):
             n_samples = obj.n_ticks;
         """
         
+        
+        
         #Work out the time/sample range
         #----------------------------
         if time_range is not None:
-            pass
+            s1 = time_range[0]*self.fs
+            s2 = time_range[1]*self.fs
         elif sample_range is not None:
             pass
         else:
-            s1 = 0;
-            s2 = self.n_ticks-1;
+            s1 = 0
+            s2 = self.n_ticks-1
             
             
+        s1_in = int(s1*self.chan_div);
+        s2_in = int(s2*self.chan_div);
+        
+        #TODO: May need to add 1 to s2_in as last
+        #may not be inclusive and we want inclusive
+        
+        #chan_id,max_number,from,to
+        
+        #(self: sonpy.amd64.sonpy.SonFile, 
+        #chan: int, nMax: int, tFrom: int, 
+        #tUpto: int = 8070450532247928832, Filter: sonpy.amd64.sonpy.MarkerFilter = <sonpy.MarkerFilter> in mode 'First', with trace column -1 and items
         
         
+        import pdb
+        pdb.set_trace()
+        
+        n = self.h.ChannelMaxTime(1) // self.h.ChannelDivide(1)
+
+        wtf = self.h.ReadInts(self.chan_id,int(n),int(0))
+        wtf = self.h.ReadFloats(2,int(1e8),s1_in,s2_in)
+        wtf = self.h.ReadFloats(int(1),int(1e5),int(0))
+        wtf = self.h.ReadInts(int(1),int(1e5),int(0))
+        wtf = self.h.ReadFloats(int(1),int(300637241),int(0),int(1e5))
+        wtf = self.h.ReadFloats(chan=int(1), nMax=int(300637241), tFrom=int(1e8), tUpto=int(1e8+1e5))
         
         """
         function s = h__DataRetrieval(obj,s1,s2,in,n_samples)

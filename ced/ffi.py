@@ -835,7 +835,7 @@ def read_wave_s(fhand: int, chan: int, n_max: int, t_from: int,
 %   fhand - An integer handle to an open file
 %   iChan - A channel number for a Waveform or Realwave channel
 %   iN - The maximum number of data points  to copy
-%   i64From - The time in ticks of the earliest time you want to read
+%   i64From - The time in TICKS of the earliest time you want to read
 %   i64To - (Optional) The time in ticks of the latest time you want to
 %   read. If not set or set to -1, read to the end of the channel
 %   maskh - (Optional) An integer handle to a marker mask (only used when reading wavemarkers)

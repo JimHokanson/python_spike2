@@ -988,6 +988,13 @@ def read_markers(fhand: int, chan: int, n_max: int, t_from: int,
     """
     Read markers. Returns (n_read, list_of_CEDMarker).
     
+    
+    Improvements
+    ------------
+    1. Allow outputing as a single object with arrays rather
+    than an array of objects
+    
+    
     %   Inputs
 %   fhand - An integer handle to an open file
 %   iChan - A channel number for an event or extended event channel
@@ -996,10 +1003,38 @@ def read_markers(fhand: int, chan: int, n_max: int, t_from: int,
 %   i64To - (Optional) The time in ticks of the latest time you want to
 %   read. If not set or set to -1, read to the end of the channel
 %   maskh - (Optional) An integer handle to a marker mask
+
+
+    //! Read Marker data from a Marker or extended Marker channel
+    /*!
+    You can read marker data from any channel that contains markers.
+    \param nFid An integer file handle (1-8)
+    \param nChan A Marker, EventBoth or extended marker channel.
+    \param pData A buffer to receive the marker data.
+    \param nMax  The maximum number of Markers to return.
+    \param tFrom The first time to include in the search for markers.
+    \param tUpto The first time not to include. Returned data will span the time range
+    tRom up to but not including tUpto.
+    \param nMask Integer filter handle Used with AdcMark channels to filter the data.
+    \return The number of markers read or a negative error code.
+    */
+    MATINT_API int S64ReadMarkers(const int nFid, 
+                                  const int nChan, 
+                                  S64Marker* pData, 
+                                  const int nMax,
+                                  const long long tFrom, 
+                                  const long long tUpto,
+                                  const int nMask);
+
+
     """
     buf = ffi.new(f"S64Marker[{n_max}]")
     n_read = lib.S64ReadMarkers(fhand, chan, buf, n_max,
                                 t_from, t_to, mask)
+    
+    
+    #JAH: This may be slow/overkill compared to simply mapping
+    #to an array.
     if n_read > 0:
         return n_read, [CEDMarker._from_c(buf[i]) for i in range(n_read)]
     return n_read, []

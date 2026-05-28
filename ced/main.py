@@ -3,10 +3,29 @@
 Created on Sat May 23 07:06:27 2026
 
 @author: Jim
+
+
+Status
+------
+ADC - done (need to verify timing)
+Marker - done
+EventBoth - needs to be tested
+EventRiseOrFall - needs to be tested
+
+WaveMark - not done
+RealMark - not done
+TextMark - not done
+
+s2rx parsing - NYI
+
+PyPi - 
+
 """
 
 # Standard
 import math
+import os
+import errno
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -17,8 +36,6 @@ import numpy as np
 #--------------------------
 from . import utils
 from . import ffi
-
-
 
 try:
     from matplotlib import pyplot as plt
@@ -49,12 +66,30 @@ class File():
     n_seconds : float
     """
 
-    def __init__(self, file_path):
+    def __init__(self, file_path, open_mode=1):
+        """
         
-        self.fhand = ffi.open(file_path, mode=1)
+        Parameters
+        ----------
+        open_mode :
+            1  = read-only
+            0  = read/write
+            -1 = try r/w then r-o.
+        
+        """
+        
+        #Path verification
+        #-----------------------------------------------
+        if not os.path.exists(file_path):
+            #This may occur if the file is not raw on Windows and is being
+            #escaped
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), file_path)
+        
+        self.fhand = ffi.open(file_path, mode=open_mode)
         if self.fhand < 0:
+            file_path2 = repr(str(file_path))
             raise RuntimeError(
-                f"Failed to open '{file_path}', error code {self.fhand}")
+                f"Failed to open '{file_path2}', error code {self.fhand}")
     
         #print("[2] version...",flush=True)
         self.version = ffi.version(self.fhand)
@@ -218,7 +253,10 @@ class File():
         >>> chans = f.get_channels(['EEG_01', 'BAD'], missing='warning')
         """
         if isinstance(names, str):
+            unpack = True
             names = [names]
+        else:
+            unpack = False
     
         if case_sensitive:
             compare_names = self.chan_names
@@ -257,6 +295,9 @@ class File():
                     results.append(None)
             else:
                 results.append(self.all_chan_objects[match_idx])
+    
+        if unpack:
+            results = results[0]
     
         return results
 
@@ -301,7 +342,10 @@ class Channel():
         time_base = parent.time_base
 
         # SampleRateInHz = 1.0 / (chan_div * time_base)
-        self.fs = 1.0 / (self.chan_div * time_base)
+        try:
+            self.fs = 1.0 / (self.chan_div * time_base)
+        except ZeroDivisionError:
+            self.fs = float('nan')
 
         self.max_time = parent.n_seconds
 
@@ -581,104 +625,566 @@ class ADC(Channel):
         )
 
 
+    def __repr__(self):
+        return utils.print_object(self)
+
+
+
+
+"""
+Event channel classes — Python equivalents of:
+    ced.channel.event_rise_or_fall
+    ced.channel.event_both
+
+Drop these into main.py, replacing the existing stub classes.
+"""
+
+
+
+# ======================================================================
+# Return types
+# ======================================================================
+
+@dataclass
+class EventTimesResult:
+    """Result from EventRiseOrFall.get_times()."""
+    times: np.ndarray          # event times in seconds
+    n_events: int
+
+    def plot(self, ax=None, **kwargs):
+        if plt is None:
+            raise ImportError("matplotlib required for plotting")
+        if ax is None:
+            ax = plt.gca()
+        ax.vlines(self.times, 0, 1, **kwargs)
+        return ax
+
+    def __repr__(self):
+        return (f"EventTimesResult(n_events={self.n_events}, "
+                f"t_range=[{self.times[0]:.4f}, {self.times[-1]:.4f}]s)"
+                if self.n_events > 0
+                else "EventTimesResult(n_events=0)")
+
+
+@dataclass
+class LevelTimesResult:
+    """
+    Result from EventBoth.get_times(return_format='times').
+    """
+    times: np.ndarray       # transition times in seconds
+    start_level: int        # 0=low, 1=high at the start
+    n_events: int
+    hit_event_max: bool     # True if max_events was reached
+
+    def __repr__(self):
+        return (f"LevelTimesResult(n_events={self.n_events}, "
+                f"start_level={self.start_level}, "
+                f"hit_max={self.hit_event_max})")
+
+
+@dataclass
+class LevelTimeSeriesResult:
+    """
+    Result from EventBoth.get_times(return_format='time_series1' or
+    'time_series2').  Can be plotted directly with plt.plot(r.x, r.y).
+    """
+    x: np.ndarray
+    y: np.ndarray
+    hit_event_max: bool
+
+    def plot(self, ax=None, **kwargs):
+        if plt is None:
+            raise ImportError("matplotlib required for plotting")
+        if ax is None:
+            ax = plt.gca()
+        ax.plot(self.x, self.y, **kwargs)
+        return ax
+
+    def __repr__(self):
+        return (f"LevelTimeSeriesResult(n_points={len(self.x)}, "
+                f"hit_max={self.hit_event_max})")
+
+
+@dataclass
+class SwitchTimesResult:
+    """Result from EventBoth.get_times(return_format='switch_times')."""
+    rise_times: np.ndarray
+    fall_times: np.ndarray
+    hit_event_max: bool
+
+    def __repr__(self):
+        return (f"SwitchTimesResult(n_rises={len(self.rise_times)}, "
+                f"n_falls={len(self.fall_times)}, "
+                f"hit_max={self.hit_event_max})")
+
+
+@dataclass
+class StartsAndStopsResult:
+    """Result from EventBoth.get_times(return_format='starts_and_stops')."""
+    start_high: np.ndarray
+    stop_high: np.ndarray
+    start_low: np.ndarray
+    stop_low: np.ndarray
+    start_level: int
+    hit_event_max: bool
+
+    def __repr__(self):
+        return (f"StartsAndStopsResult(n_high={len(self.start_high)}, "
+                f"n_low={len(self.start_low)}, "
+                f"start_level={self.start_level}, "
+                f"hit_max={self.hit_event_max})")
+
+
+# ======================================================================
+# Channel classes
+# ======================================================================
+
 class EventRiseOrFall(Channel):
+    """
+    EventFall or EventRise channel.
+
+    Attributes
+    ----------
+    type : str
+        'rise' or 'fall'
+    ideal_rate : float
+        Expected sustained maximum event rate (Hz).
+    """
 
     def __init__(self, fhand, chan_id, parent, is_rise):
         super().__init__(fhand, chan_id, parent)
-        self.is_rise = is_rise
 
-    def get_data(self, time_range=None, max_events=1_000_000):
+        self.fs = 1.0 / parent.time_base
+        self.max_time = self.n_ticks / self.fs
+        self.type = "rise" if is_rise else "fall"
+        self.ideal_rate = ffi.ideal_rate(fhand, chan_id)
+
+    def get_times(self, time_range=None, time_format='numeric',
+                  max_events=1_000_000):
         """
-        Read event times.
+        Read event times from the channel.
+
+        Parameters
+        ----------
+        time_range : (float, float), optional
+            Start and end time in seconds. Default is entire channel.
+        time_format : str, default 'numeric'
+            'numeric'  — times in seconds as float64.
+            'datetime' — absolute datetime if file has a valid start
+                         datetime, otherwise seconds.
+        max_events : int, default 1_000_000
+            Maximum number of events to read.
 
         Returns
         -------
-        n_read : int
-        times : np.ndarray (int64, ticks)
+        EventTimesResult
         """
+        if time_range is None:
+            time_range = (0.0, self.max_time)
 
-        
-        """
-            arguments
-                obj ced.channel.adc
-                in.n_init (1,1) {mustBeNumeric} = 1e4
-                in.growth_rate (1,1) {mustBeNumeric} = 2
-                in.time_range (:,:) {h__sizeCheck(in.time_range)} = []
-                in.sample_range (:,:) {h__sizeCheck(in.sample_range)} = []
-                in.time_format {mustBeMember(in.time_format,{'none','numeric','datetime'})} = 'numeric'
-                in.return_format {mustBeMember(in.return_format,{'int16','single','double','data_object'})} = 'double'    
-            end
+        # Convert seconds → ticks
+        t1 = round(time_range[0] * self.fs)
+        t2 = round(time_range[1] * self.fs)
 
-            if in.return_format == "data_object" && isempty(which('sci.time_series.data'))
-                in.return_format = 'double';
-            end
+        if t1 < 0:
+            raise ValueError('Invalid time range: t1 too early')
+        if t2 > self.n_ticks:
+            raise ValueError('Invalid time range: t2 too late')
 
-            n_samples = obj.n_ticks;
-        """
-        
-        if time_range is not None:
-            t_from = ffi.secs_to_ticks(self.fhand, time_range[0])
-            t_to = ffi.secs_to_ticks(self.fhand, time_range[1])
-        else:
-            t_from = 0
-            t_to = -1
+        # +1 because DLL end is non-inclusive
+        t2 = t2 + 1
 
-        return ffi.read_events(
-            self.fhand, self.chan_id, max_events, t_from, t_to)
+        n_read, raw_times = ffi.read_events(
+            self.fhand, self.chan_id, max_events, t1, t2)
 
+        if n_read < 0:
+            raise RuntimeError(f'Error reading events, code {n_read}')
+
+        # Convert ticks → seconds
+        times = raw_times.astype(np.float64) / self.fs
+
+        if time_format == 'datetime':
+            start_dt = self.parent.start_datetime
+            if start_dt is not None:
+                origin = np.datetime64(start_dt, 'us')
+                offsets = (times * 1e6).astype('timedelta64[us]')
+                times = origin + offsets
+            # else: leave as numeric seconds
+
+        return EventTimesResult(times=times, n_events=n_read)
+
+    # Keep get_data as an alias for backward compat
+    def get_data(self, **kwargs):
+        return self.get_times(**kwargs)
+
+    def __repr__(self):
+        return utils.print_object(self)
 
 class EventBoth(Channel):
+    """
+    EventBoth (level / digital) channel.
+
+    The signal starts high or low and toggles at each event time.
+
+    Attributes
+    ----------
+    ideal_rate : float
+        Expected sustained maximum event rate (Hz).
+    """
 
     def __init__(self, fhand, chan_id, parent):
         super().__init__(fhand, chan_id, parent)
 
-    def get_data(self, time_range=None, max_events=1_000_000):        
-        
-        
+        self.fs = 1.0 / parent.time_base
+        self.max_time = self.n_ticks / self.fs
+        self.ideal_rate = ffi.ideal_rate(fhand, chan_id)
+
+    def get_times(self, time_range=None, return_format='times',
+                  max_events=1_000_000):
         """
-        Read level data.
+        Read level/toggle data from the channel.
+
+        Parameters
+        ----------
+        time_range : (float, float), optional
+            Start and end time in seconds. Default is entire channel.
+        return_format : str, default 'times'
+            'times'           — raw transition times + start_level.
+            'time_series1'    — (x, y) with one point per transition,
+                                includes starting point.
+            'time_series2'    — (x, y) with doubled points so that
+                                plt.plot(x, y) draws a square wave.
+            'switch_times'    — separate rise_times and fall_times.
+            'starts_and_stops' — paired start/stop for high and low
+                                 periods.
+        max_events : int, default 1_000_000
+            Maximum number of events to read.
 
         Returns
         -------
-        n_read : int
-        times : np.ndarray (int64, ticks)
-        level : int
-            Level of the first returned point (1=high, 0=low).
+        LevelTimesResult | LevelTimeSeriesResult |
+        SwitchTimesResult | StartsAndStopsResult
         """
-        if time_range is not None:
-            t_from = ffi.secs_to_ticks(self.fhand, time_range[0])
-            t_to = ffi.secs_to_ticks(self.fhand, time_range[1])
+        if time_range is None:
+            time_range = (0.0, self.max_time)
+            end_time = self.parent.n_seconds
         else:
-            t_from = 0
-            t_to = -1
+            end_time = time_range[1]
 
-        return ffi.read_levels(
-            self.fhand, self.chan_id, max_events, t_from, t_to)
+        t1 = round(time_range[0] * self.fs)
+        t2 = round(time_range[1] * self.fs)
 
+        file_time = self.parent.n_seconds
+        last_file_sample = round(file_time * self.fs)
+
+        if t1 < 0:
+            raise ValueError('Invalid time range: t1 too early')
+        if t2 > self.n_ticks:
+            if t2 > last_file_sample:
+                raise ValueError('Invalid time range: t2 too late')
+            else:
+                t2 = self.n_ticks
+
+        # +1: DLL end is non-inclusive
+        t2 = t2 + 1
+
+        n_read, raw_times, start_level = ffi.read_levels(
+            self.fhand, self.chan_id, max_events, t1, t2)
+
+        start_level = int(start_level)
+
+        if n_read < 0:
+            raise RuntimeError(f'Error reading levels, code {n_read}')
+
+        # Convert ticks → seconds
+        times = raw_times.astype(np.float64) / self.fs
+        n_events = len(times)
+
+        hit_event_max = (n_events >= max_events)
+        if hit_event_max and n_events > 0:
+            end_time = times[-1]
+
+        odd = (n_events % 2) == 1
+
+        # ---------------------------------------------------------
+        if return_format == 'times':
+            return LevelTimesResult(
+                times=times,
+                start_level=start_level,
+                n_events=n_events,
+                hit_event_max=hit_event_max,
+            )
+
+        # ---------------------------------------------------------
+        elif return_format == 'time_series1':
+            # x: starting time, then each transition time
+            # y: starting level, then alternating levels
+            x = np.empty(n_events + 1)
+            x[0] = time_range[0]
+            x[1:] = times
+
+            y = np.empty(n_events + 1)
+            y[0] = start_level
+            # After each transition the level toggles
+            for i in range(n_events):
+                y[i + 1] = 1 - y[i]
+
+            return LevelTimeSeriesResult(
+                x=x, y=y, hit_event_max=hit_event_max)
+
+        # ---------------------------------------------------------
+        elif return_format == 'time_series2':
+            # Two points per transition (old value + new value at same
+            # time) plus start and end → suitable for plt.plot()
+            n_xy = 2 * n_events + 2
+            x = np.empty(n_xy)
+            y = np.empty(n_xy)
+
+            x[0] = time_range[0]
+            y[0] = start_level
+
+            level = start_level
+            j = 1
+            for i in range(n_events):
+                # point at transition time with OLD level
+                x[j] = times[i]
+                y[j] = level
+                # point at transition time with NEW level
+                level = 1 - level
+                x[j + 1] = times[i]
+                y[j + 1] = level
+                j += 2
+
+            # final hold to end_time
+            x[-1] = end_time
+            y[-1] = level
+
+            return LevelTimeSeriesResult(
+                x=x, y=y, hit_event_max=hit_event_max)
+
+        # ---------------------------------------------------------
+        elif return_format == 'switch_times':
+            if start_level == 1:
+                # starts high → first transition is a fall
+                fall_times = times[0::2]
+                rise_times = times[1::2]
+            else:
+                # starts low → first transition is a rise
+                rise_times = times[0::2]
+                fall_times = times[1::2]
+
+            return SwitchTimesResult(
+                rise_times=rise_times,
+                fall_times=fall_times,
+                hit_event_max=hit_event_max,
+            )
+
+        # ---------------------------------------------------------
+        elif return_format == 'starts_and_stops':
+            t_start = time_range[0]
+
+            if start_level == 1:
+                # Starts HIGH: transitions are fall, rise, fall, rise, ...
+                # High periods: [t_start, fall_0], [rise_0, fall_1], ...
+                # Low periods:  [fall_0, rise_0], [fall_1, rise_1], ...
+                fall_t = times[0::2]
+                rise_t = times[1::2]
+
+                start_high = np.concatenate([[t_start], rise_t])
+                if odd:
+                    # odd transitions → ends low
+                    stop_high = fall_t
+                    start_low = fall_t
+                    stop_low = np.concatenate([rise_t, [end_time]])
+                else:
+                    # even transitions → ends high
+                    stop_high = np.concatenate([fall_t, [end_time]])
+                    start_low = fall_t
+                    stop_low = rise_t
+            else:
+                # Starts LOW: transitions are rise, fall, rise, fall, ...
+                rise_t = times[0::2]
+                fall_t = times[1::2]
+
+                start_low = np.concatenate([[t_start], fall_t])
+                start_high = rise_t
+                if odd:
+                    # odd transitions → ends high
+                    stop_high = np.concatenate([fall_t, [end_time]])
+                    stop_low = rise_t
+                else:
+                    # even transitions → ends low
+                    stop_high = fall_t
+                    stop_low = np.concatenate([rise_t, [end_time]])
+
+            return StartsAndStopsResult(
+                start_high=start_high,
+                stop_high=stop_high,
+                start_low=start_low,
+                stop_low=stop_low,
+                start_level=start_level,
+                hit_event_max=hit_event_max,
+            )
+
+        else:
+            raise ValueError(f"Unknown return_format: '{return_format}'")
+
+    # Keep get_data as an alias
+    def get_data(self, **kwargs):
+        return self.get_times(**kwargs)
+
+    def __repr__(self):
+        return utils.print_object(self)
+
+@dataclass
+class MarkerResult:
+    """
+    Result from Marker.get_data().
+
+    Attributes
+    ----------
+    times : np.ndarray
+        Event times in seconds.
+    c1, c2, c3, c4 : np.ndarray or list of str
+        The four marker code channels. Character arrays if to_char=True.
+    n_events : int
+    """
+    times: np.ndarray
+    c1: object
+    c2: object
+    c3: object
+    c4: object
+    n_events: int
+
+    def __repr__(self):
+        return utils.print_object(self)
+
+    def plot(self, label_code=1, ax=None, text_offset=0.02, **kwargs):
+        """
+        Plot vertical lines at each marker time, optionally labeled.
+    
+        Parameters
+        ----------
+        label_code : int or None, default 1
+            Which code channel to use as labels (1–4), or None to skip.
+        ax : matplotlib Axes, optional
+        text_offset : float, default 0.02
+            Vertical offset for labels, in axes fraction.
+        **kwargs
+            Passed to ax.axvline() (e.g. color, linestyle, alpha).
+        """
+        if plt is None:
+            raise ImportError("matplotlib required for plotting")
+        if ax is None:
+            ax = plt.gca()
+    
+        kwargs.setdefault('alpha', 0.5)
+        kwargs.setdefault('linewidth', 0.8)
+    
+        codes = {1: self.c1, 2: self.c2, 3: self.c3, 4: self.c4}
+        labels = codes.get(label_code) if label_code is not None else None
+    
+        for i, t in enumerate(self.times):
+            ax.axvline(t, **kwargs)
+            if labels is not None:
+                label = str(labels[i])
+                ax.text(t, text_offset, label,
+                        transform=ax.get_xaxis_transform(),
+                        ha='center', va='bottom', fontsize=8, rotation=90)
+
+        return ax
 
 class Marker(Channel):
+    """
+    Marker channel (e.g. Keyboard markers).
+
+    Each marker has a 64-bit timestamp and four 8-bit codes.
+    """
 
     def __init__(self, fhand, chan_id, parent):
         super().__init__(fhand, chan_id, parent)
 
-    def get_data(self, time_range=None, max_events=1_000_000):
+        self.fs = 1.0 / parent.time_base
+        self.max_time = self.n_ticks / self.fs
+
+    def get_data(self, time_range=None, max_events=1_000_000,
+                 to_char=None):
         """
-        Read markers.
+        Read marker data from the channel.
+
+        Parameters
+        ----------
+        time_range : (float, float), optional
+            Start and end time in seconds. Default is entire channel.
+        max_events : int, default 1_000_000
+            Maximum number of markers to read.
+        to_char : bool, optional
+            Convert code bytes to characters. Defaults to True if the
+            channel name is 'Keyboard', False otherwise.
+
+
+        Improvements
+        ------------
+        1. This implementation allocates at 1 million events which is most
+        likely overkill. The MATLAB version starts at 1000 then grows as more
+        comes in to eventually get to 1 million.
 
         Returns
         -------
-        n_read : int
-        markers : list of ffi.CEDMarker
+        MarkerResult
         """
-        if time_range is not None:
-            t_from = ffi.secs_to_ticks(self.fhand, time_range[0])
-            t_to = ffi.secs_to_ticks(self.fhand, time_range[1])
-        else:
-            t_from = 0
-            t_to = -1
+                
+        if to_char is None:
+            to_char = (self.name == "Keyboard")
 
-        return ffi.read_markers(
-            self.fhand, self.chan_id, max_events, t_from, t_to)
+        if time_range is None:
+            time_range = (0.0, self.max_time)
+
+        t1 = round(time_range[0] * self.fs)
+        t2 = round(time_range[1] * self.fs)
+
+        if t1 < 0:
+            raise ValueError('Invalid time range: t1 too early')
+        if t2 > self.n_ticks:
+            raise ValueError('Invalid time range: t2 too late')
+
+        # +1: DLL end is non-inclusive
+        t2 = t2 + 1
+
+        n_read, markers = ffi.read_markers(
+            self.fhand, self.chan_id, max_events, t1, t2)
+
+        if n_read < 0:
+            raise RuntimeError(f'Error reading markers, code {n_read}')
+
+        if n_read == 0:
+            return MarkerResult(
+                times=np.empty(0),
+                c1=np.empty(0), c2=np.empty(0),
+                c3=np.empty(0), c4=np.empty(0),
+                n_events=0,
+            )
+
+        # Collapse into flat arrays
+        times = np.array([m.time for m in markers], dtype=np.float64) / self.fs
+        c1 = np.array([m.code1 for m in markers], dtype=np.uint8)
+        c2 = np.array([m.code2 for m in markers], dtype=np.uint8)
+        c3 = np.array([m.code3 for m in markers], dtype=np.uint8)
+        c4 = np.array([m.code4 for m in markers], dtype=np.uint8)
+
+        if to_char:
+            c1 = np.array([chr(c) for c in c1])
+            c2 = np.array([chr(c) for c in c2])
+            c3 = np.array([chr(c) for c in c3])
+            c4 = np.array([chr(c) for c in c4])
+
+        return MarkerResult(
+            times=times, c1=c1, c2=c2, c3=c3, c4=c4,
+            n_events=n_read,
+        )
+    
+    def __repr__(self):
+        return utils.print_object(self)
 
 
 class WaveMark(Channel):

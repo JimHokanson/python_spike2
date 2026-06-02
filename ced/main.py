@@ -36,6 +36,7 @@ import numpy as np
 #--------------------------
 from . import utils
 from . import ffi
+from .s2rx import S2rxFile
 
 try:
     from matplotlib import pyplot as plt
@@ -84,6 +85,25 @@ class File():
             #This may occur if the file is not raw on Windows and is being
             #escaped
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), file_path)
+            
+            
+        root, full_filename = os.path.split(file_path)
+        name_no_ext, file_ext = os.path.splitext(full_filename)
+        
+        if file_ext == ".s2rx":
+            # ASSUMPTION: Assuming smr is the only valid option?
+            # No - smrx is also an option
+            file_path = os.path.join(root, name_no_ext + ".smrx")
+            if not os.path.isfile(file_path):
+                file_path = os.path.join(root, name_no_ext + ".smr")
+                if not os.path.isfile(file_path):
+                    raise FileNotFoundError("s2rx file is not a valid SON file")
+                
+        s2rx_path = os.path.join(root, name_no_ext + ".s2rx")
+        if os.path.isfile(s2rx_path):
+            self.meta_file = S2rxFile(s2rx_path)
+        else:
+            self.meta_file = None
         
         self.fhand = ffi.open(file_path, mode=open_mode)
         if self.fhand < 0:
@@ -639,15 +659,16 @@ Event channel classes — Python equivalents of:
 Drop these into main.py, replacing the existing stub classes.
 """
 
-
-
 # ======================================================================
 # Return types
 # ======================================================================
 
 @dataclass
 class EventTimesResult:
-    """Result from EventRiseOrFall.get_times()."""
+    """
+    Result from:
+        EventRiseOrFall.get_times().
+    """
     times: np.ndarray          # event times in seconds
     n_events: int
 
@@ -660,79 +681,73 @@ class EventTimesResult:
         return ax
 
     def __repr__(self):
-        return (f"EventTimesResult(n_events={self.n_events}, "
-                f"t_range=[{self.times[0]:.4f}, {self.times[-1]:.4f}]s)"
-                if self.n_events > 0
-                else "EventTimesResult(n_events=0)")
+        return utils.print_object(self)
 
 
 @dataclass
 class LevelTimesResult:
     """
-    Result from EventBoth.get_times(return_format='times').
+    Result from:
+        EventBoth.get_times(return_format='times').
     """
     times: np.ndarray       # transition times in seconds
     start_level: int        # 0=low, 1=high at the start
     n_events: int
     hit_event_max: bool     # True if max_events was reached
-
-    def __repr__(self):
-        return (f"LevelTimesResult(n_events={self.n_events}, "
-                f"start_level={self.start_level}, "
-                f"hit_max={self.hit_event_max})")
-
-
-@dataclass
-class LevelTimeSeriesResult:
-    """
-    Result from EventBoth.get_times(return_format='time_series1' or
-    'time_series2').  Can be plotted directly with plt.plot(r.x, r.y).
-    """
-    x: np.ndarray
-    y: np.ndarray
-    hit_event_max: bool
-
+    start_time: float 
+    stop_time: float
+    
     def plot(self, ax=None, **kwargs):
         if plt is None:
             raise ImportError("matplotlib required for plotting")
         if ax is None:
             ax = plt.gca()
-        ax.plot(self.x, self.y, **kwargs)
+            
+        #0 - at start level
+        #- at end, draw to end time (requires holding on to max time from parent)
+        
+        #all times have two points
+        #- same x
+        #- different y
+        
+        
+        #    111111    111111
+        #
+        #00000    000000    0000000
+        #
+        #    1    3    5    7
+        #    2    4    6    8
+        #   
+        
+        
+        
+        x = np.empty(self.n_events*2 + 2)
+        y = np.empty(self.n_events*2 + 2)
+        
+        x[0] = self.start_time
+        x[1:-1:2] = self.times
+        x[2::2] = self.times
+        #Fix this - go to end time
+        x[-1] = self.stop_time
+        
+        y[0] = self.start_level
+        y[1::4] = self.start_level
+        if self.start_level == 0:
+            next_level = 1
+        else:
+            next_level = 0
+        y[2::4] = next_level
+        y[3::4] = next_level
+        y[4::4] = self.start_level
+        
+        #Where does this end?
+        y[-1] = y[-2]
+    
+        ax.plot(x, y, **kwargs)
         return ax
 
     def __repr__(self):
-        return (f"LevelTimeSeriesResult(n_points={len(self.x)}, "
-                f"hit_max={self.hit_event_max})")
-
-
-@dataclass
-class SwitchTimesResult:
-    """Result from EventBoth.get_times(return_format='switch_times')."""
-    rise_times: np.ndarray
-    fall_times: np.ndarray
-    hit_event_max: bool
-
-    def __repr__(self):
-        return (f"SwitchTimesResult(n_rises={len(self.rise_times)}, "
-                f"n_falls={len(self.fall_times)}, "
-                f"hit_max={self.hit_event_max})")
-
-
-@dataclass
-class StartsAndStopsResult:
-    """Result from EventBoth.get_times(return_format='starts_and_stops')."""
-    start_high: np.ndarray
-    stop_high: np.ndarray
-    start_low: np.ndarray
-    stop_low: np.ndarray
-    start_level: int
-    hit_event_max: bool
-
-    def __repr__(self):
-        return (f"StartsAndStopsResult(n_high={len(self.start_high)}, "
-                f"n_low={len(self.start_low)}, "
-                f"start_level={self.start_level}, "
-                f"hit_max={self.hit_event_max})")
+        return utils.print_object(self)
 
 
 # ======================================================================
@@ -836,10 +851,12 @@ class EventBoth(Channel):
         super().__init__(fhand, chan_id, parent)
 
         self.fs = 1.0 / parent.time_base
+        
+        #??? How does this compare to the max time of the parent?
         self.max_time = self.n_ticks / self.fs
         self.ideal_rate = ffi.ideal_rate(fhand, chan_id)
 
-    def get_times(self, time_range=None, return_format='times',
+    def get_times(self, time_range=None,
                   max_events=1_000_000):
         """
         Read level/toggle data from the channel.
@@ -848,27 +865,20 @@ class EventBoth(Channel):
         ----------
         time_range : (float, float), optional
             Start and end time in seconds. Default is entire channel.
-        return_format : str, default 'times'
-            'times'           — raw transition times + start_level.
-            'time_series1'    — (x, y) with one point per transition,
-                                includes starting point.
-            'time_series2'    — (x, y) with doubled points so that
-                                plt.plot(x, y) draws a square wave.
-            'switch_times'    — separate rise_times and fall_times.
-            'starts_and_stops' — paired start/stop for high and low
-                                 periods.
         max_events : int, default 1_000_000
             Maximum number of events to read.
 
         Returns
         -------
-        LevelTimesResult | LevelTimeSeriesResult |
-        SwitchTimesResult | StartsAndStopsResult
+        LevelTimesResult
+        
         """
         if time_range is None:
             time_range = (0.0, self.max_time)
+            start_time = 0
             end_time = self.parent.n_seconds
         else:
+            start_time = time_range[0]
             end_time = time_range[1]
 
         t1 = round(time_range[0] * self.fs)
@@ -901,133 +911,15 @@ class EventBoth(Channel):
         n_events = len(times)
 
         hit_event_max = (n_events >= max_events)
-        if hit_event_max and n_events > 0:
-            end_time = times[-1]
 
-        odd = (n_events % 2) == 1
+        return LevelTimesResult(
+            times=times,
+            start_level=start_level,
+            n_events=n_events,
+            hit_event_max=hit_event_max,
+            start_time=start_time,
+            stop_time=end_time)
 
-        # ---------------------------------------------------------
-        if return_format == 'times':
-            return LevelTimesResult(
-                times=times,
-                start_level=start_level,
-                n_events=n_events,
-                hit_event_max=hit_event_max,
-            )
-
-        # ---------------------------------------------------------
-        elif return_format == 'time_series1':
-            # x: starting time, then each transition time
-            # y: starting level, then alternating levels
-            x = np.empty(n_events + 1)
-            x[0] = time_range[0]
-            x[1:] = times
-
-            y = np.empty(n_events + 1)
-            y[0] = start_level
-            # After each transition the level toggles
-            for i in range(n_events):
-                y[i + 1] = 1 - y[i]
-
-            return LevelTimeSeriesResult(
-                x=x, y=y, hit_event_max=hit_event_max)
-
-        # ---------------------------------------------------------
-        elif return_format == 'time_series2':
-            # Two points per transition (old value + new value at same
-            # time) plus start and end → suitable for plt.plot()
-            n_xy = 2 * n_events + 2
-            x = np.empty(n_xy)
-            y = np.empty(n_xy)
-
-            x[0] = time_range[0]
-            y[0] = start_level
-
-            level = start_level
-            j = 1
-            for i in range(n_events):
-                # point at transition time with OLD level
-                x[j] = times[i]
-                y[j] = level
-                # point at transition time with NEW level
-                level = 1 - level
-                x[j + 1] = times[i]
-                y[j + 1] = level
-                j += 2
-
-            # final hold to end_time
-            x[-1] = end_time
-            y[-1] = level
-
-            return LevelTimeSeriesResult(
-                x=x, y=y, hit_event_max=hit_event_max)
-
-        # ---------------------------------------------------------
-        elif return_format == 'switch_times':
-            if start_level == 1:
-                # starts high → first transition is a fall
-                fall_times = times[0::2]
-                rise_times = times[1::2]
-            else:
-                # starts low → first transition is a rise
-                rise_times = times[0::2]
-                fall_times = times[1::2]
-
-            return SwitchTimesResult(
-                rise_times=rise_times,
-                fall_times=fall_times,
-                hit_event_max=hit_event_max,
-            )
-
-        # ---------------------------------------------------------
-        elif return_format == 'starts_and_stops':
-            t_start = time_range[0]
-
-            if start_level == 1:
-                # Starts HIGH: transitions are fall, rise, fall, rise, ...
-                # High periods: [t_start, fall_0], [rise_0, fall_1], ...
-                # Low periods:  [fall_0, rise_0], [fall_1, rise_1], ...
-                fall_t = times[0::2]
-                rise_t = times[1::2]
-
-                start_high = np.concatenate([[t_start], rise_t])
-                if odd:
-                    # odd transitions → ends low
-                    stop_high = fall_t
-                    start_low = fall_t
-                    stop_low = np.concatenate([rise_t, [end_time]])
-                else:
-                    # even transitions → ends high
-                    stop_high = np.concatenate([fall_t, [end_time]])
-                    start_low = fall_t
-                    stop_low = rise_t
-            else:
-                # Starts LOW: transitions are rise, fall, rise, fall, ...
-                rise_t = times[0::2]
-                fall_t = times[1::2]
-
-                start_low = np.concatenate([[t_start], fall_t])
-                start_high = rise_t
-                if odd:
-                    # odd transitions → ends high
-                    stop_high = np.concatenate([fall_t, [end_time]])
-                    stop_low = rise_t
-                else:
-                    # even transitions → ends low
-                    stop_high = fall_t
-                    stop_low = np.concatenate([rise_t, [end_time]])
-
-            return StartsAndStopsResult(
-                start_high=start_high,
-                stop_high=stop_high,
-                start_low=start_low,
-                stop_low=stop_low,
-                start_level=start_level,
-                hit_event_max=hit_event_max,
-            )
-
-        else:
-            raise ValueError(f"Unknown return_format: '{return_format}'")
 
     # Keep get_data as an alias
     def get_data(self, **kwargs):

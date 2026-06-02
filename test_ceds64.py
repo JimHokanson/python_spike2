@@ -22,8 +22,14 @@ fp = r"C:\Users\Jim\OneDrive - mcw.edu\Robilotto, Gabriella's files - Cystometry
 
 
 import ced
+import os
 
-fp = r'E:\repos\data\spike2_example_files\files\demo1.smr'
+root = r"C:\repos\data\spike2_example_files\files"
+
+
+#demo1 - ADC with multiple start/stops and one event rise
+#---------------------------------------------------------
+fp = os.path.join(root,"demo1.smr")
 
 f = ced.read_file(fp)
 
@@ -36,6 +42,50 @@ from matplotlib import pyplot as plt
 plt.cla()
 for d in data:
     d.plot()
+    
+    
+s = f.event_rises[0]
+
+data = s.get_data()
+
+#Demo_Jim
+#---------------------------------------------------
+fp = os.path.join(root,"Demo_Jim.smrx")
+
+f = ced.read_file(fp)
+
+s = f.event_falls[0]
+data = s.get_data()
+data.plot()
+
+s = f.event_both[0]
+data = s.get_data()
+data.plot()
+
+"""
+
+        return_format : str, default 'times'
+            'times'           — raw transition times + start_level.
+            'time_series1'    — (x, y) with one point per transition,
+                                includes starting point.
+            'time_series2'    — (x, y) with doubled points so that
+                                plt.plot(x, y) draws a square wave.
+            'switch_times'    — separate rise_times and fall_times.
+            'starts_and_stops' — paired start/stop for high and low
+                                 periods.
+
+"""
+
+
+
+
+
+
+
+
+
+    
+
 
 
 

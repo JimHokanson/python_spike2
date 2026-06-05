@@ -1,0 +1,8 @@
+# Declares the build system so `pip` / `python -m build` can build this
+# project in an isolated environment. Project metadata itself is defined in
+# setup.py (kept there because this package ships prebuilt binaries and uses
+# dynamic logic to read the README).
+
+[build-system]
+requires = ["setuptools", "wheel", "cffi>=1.0"]
+build-backend = "setuptools.build_meta"

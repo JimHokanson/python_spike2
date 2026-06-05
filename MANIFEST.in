@@ -1,0 +1,21 @@
+# Files to include in the source distribution (sdist).
+# (package_data in setup.py governs the wheel; this governs the sdist.)
+
+include README.md
+include LICENSE
+
+# Prebuilt CFFI extensions and generated C source
+recursive-include ced *.pyd
+recursive-include ced *.c
+
+# Native libraries, headers, and MATLAB prototype references
+recursive-include ced/x64 *.dll *.h *.lib *.m
+recursive-include ced/x86 *.dll *.h *.lib *.m
+
+# Do not ship intermediate build artifacts.
+# NOTE: do NOT use the usual "*.py[cod]" pattern here -- the [cod] class also
+# matches ".pyd", which would wrongly drop our prebuilt Windows extensions.
+prune ced/Release
+global-exclude *.obj *.exp
+global-exclude *.pyc *.pyo
+global-exclude __pycache__

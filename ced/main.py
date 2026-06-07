@@ -22,12 +22,15 @@ PyPi -
 
 """
 
+from __future__ import annotations
+
 # Standard
 import math
 import os
 import errno
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Optional, Union
 
 # Third Party
 import numpy as np
@@ -44,7 +47,7 @@ except ImportError:
     plt = None
 
 
-def read_file(file_path):
+def read_file(file_path: Union[str, os.PathLike]) -> "File":
     """
     Preferred entry point for working with this module.
     """
@@ -67,7 +70,7 @@ class File():
     n_seconds : float
     """
 
-    def __init__(self, file_path, open_mode=1):
+    def __init__(self, file_path: Union[str, os.PathLike], open_mode: int = 1) -> None:
         """
         
         Parameters
@@ -227,7 +230,7 @@ class File():
     
         self.chan_info = chan_info
 
-    def close(self):
+    def close(self) -> None:
         """Close the underlying SON file."""
         if self.fhand is not None:
             ffi.close(self.fhand)
@@ -241,8 +244,9 @@ class File():
             pass
     """
     
-    def get_channels(self, names, case_sensitive=False, 
-                     partial_match='anywhere', missing='error'):
+    def get_channels(self, names: Union[str, list[str]], case_sensitive: bool = False,
+                     partial_match: Union[str, bool] = 'anywhere',
+                     missing: str = 'error') -> Union["Channel", list[Optional["Channel"]]]:
         """
         Retrieve channel objects by name.
     
@@ -321,7 +325,7 @@ class File():
     
         return results
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return utils.print_object(self)
 
 
@@ -348,18 +352,18 @@ class Channel():
     y_range : list
     """
 
-    def __init__(self, fhand, chan_id, parent):
-        self.fhand = fhand
-        self.chan_id = chan_id
-        self.parent = parent
+    def __init__(self, fhand: int, chan_id: int, parent: "File") -> None:
+        self.fhand: int = fhand
+        self.chan_id: int = chan_id
+        self.parent: "File" = parent
 
-        self.n_ticks = ffi.chan_max_time(fhand, chan_id)
-        self.name = ffi.chan_title(fhand, chan_id)
-        self.units = ffi.chan_units(fhand, chan_id).strip()
-        self.comment = ffi.chan_comment(fhand, chan_id)
+        self.n_ticks: int = ffi.chan_max_time(fhand, chan_id)
+        self.name: str = ffi.chan_title(fhand, chan_id)
+        self.units: str = ffi.chan_units(fhand, chan_id).strip()
+        self.comment: str = ffi.chan_comment(fhand, chan_id)
 
-        self.chan_div = ffi.chan_divide(fhand, chan_id)
-        time_base = parent.time_base
+        self.chan_div: int = ffi.chan_divide(fhand, chan_id)
+        time_base: float = parent.time_base
 
         # SampleRateInHz = 1.0 / (chan_div * time_base)
         try:
@@ -375,7 +379,7 @@ class Channel():
         y1, y2 = ffi.chan_y_range(fhand, chan_id)
         self.y_range = [y1, y2]
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return utils.print_object(self)
 
 
@@ -414,9 +418,9 @@ class WaveformSegment:
     last_sample: int
     start_time: float
     n_samples: int
-    time: object = None
+    time: Optional[np.ndarray] = None
     
-    def plot(self):
+    def plot(self) -> None:
         if plt is None:
             raise ImportError(
                 "matplotlib is required for plotting. "
@@ -428,7 +432,7 @@ class WaveformSegment:
         else:
             plt.plot(self.time,self.data)
     
-    def __repr__(self):
+    def __repr__(self) -> str:
         return utils.print_object(self)
 
 class ADC(Channel):
@@ -444,9 +448,9 @@ class ADC(Channel):
     parent : File
     """
 
-    def __init__(self, fhand, chan_id, parent):
+    def __init__(self, fhand: int, chan_id: int, parent: "File") -> None:
         super().__init__(fhand, chan_id, parent)
-        self.n_ticks = math.ceil(parent.n_ticks / self.chan_div)
+        self.n_ticks: int = math.ceil(parent.n_ticks / self.chan_div)
 
 
         """
@@ -480,8 +484,10 @@ class ADC(Channel):
         return n_read, data, start_sample, start_time
         """
     
-    def get_data(self, time_range=None, sample_range=None,
-                     return_format='double', time_format='numeric'):
+    def get_data(self, time_range: Optional[tuple[float, float]] = None,
+                 sample_range: Optional[tuple[int, int]] = None,
+                 return_format: str = 'double',
+                 time_format: str = 'numeric') -> list["WaveformSegment"]:
             """
             Read waveform data, automatically handling gaps/pauses.
      
@@ -564,7 +570,8 @@ class ADC(Channel):
     # ------------------------------------------------------------------
     # Private helper — single contiguous read
     # ------------------------------------------------------------------
-    def _read_segment(self, s1, s2, n_samples, return_format, time_format):
+    def _read_segment(self, s1: int, s2: int, n_samples: int,
+                      return_format: str, time_format: str) -> "WaveformSegment":
         """
         One call to the DLL.  Returns data up to the next gap (or end).
         """
@@ -645,7 +652,7 @@ class ADC(Channel):
         )
 
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return utils.print_object(self)
 
 
@@ -672,7 +679,7 @@ class EventTimesResult:
     times: np.ndarray          # event times in seconds
     n_events: int
 
-    def plot(self, ax=None, **kwargs):
+    def plot(self, ax=None, **kwargs) -> object:
         if plt is None:
             raise ImportError("matplotlib required for plotting")
         if ax is None:
@@ -680,7 +687,7 @@ class EventTimesResult:
         ax.vlines(self.times, 0, 1, **kwargs)
         return ax
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return utils.print_object(self)
 
 
@@ -697,7 +704,7 @@ class LevelTimesResult:
     start_time: float 
     stop_time: float
     
-    def plot(self, ax=None, **kwargs):
+    def plot(self, ax=None, **kwargs) -> object:
         if plt is None:
             raise ImportError("matplotlib required for plotting")
         if ax is None:
@@ -746,7 +753,7 @@ class LevelTimesResult:
         ax.plot(x, y, **kwargs)
         return ax
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return utils.print_object(self)
 
 
@@ -766,16 +773,17 @@ class EventRiseOrFall(Channel):
         Expected sustained maximum event rate (Hz).
     """
 
-    def __init__(self, fhand, chan_id, parent, is_rise):
+    def __init__(self, fhand: int, chan_id: int, parent: "File", is_rise: bool) -> None:
         super().__init__(fhand, chan_id, parent)
 
-        self.fs = 1.0 / parent.time_base
-        self.max_time = self.n_ticks / self.fs
-        self.type = "rise" if is_rise else "fall"
-        self.ideal_rate = ffi.ideal_rate(fhand, chan_id)
+        self.fs: float = 1.0 / parent.time_base
+        self.max_time: float = self.n_ticks / self.fs
+        self.type: str = "rise" if is_rise else "fall"
+        self.ideal_rate: float = ffi.ideal_rate(fhand, chan_id)
 
-    def get_times(self, time_range=None, time_format='numeric',
-                  max_events=1_000_000):
+    def get_times(self, time_range: Optional[tuple[float, float]] = None,
+                  time_format: str = 'numeric',
+                  max_events: int = 1_000_000) -> "EventTimesResult":
         """
         Read event times from the channel.
 
@@ -829,10 +837,10 @@ class EventRiseOrFall(Channel):
         return EventTimesResult(times=times, n_events=n_read)
 
     # Keep get_data as an alias for backward compat
-    def get_data(self, **kwargs):
+    def get_data(self, **kwargs) -> "EventTimesResult":
         return self.get_times(**kwargs)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return utils.print_object(self)
 
 class EventBoth(Channel):
@@ -847,17 +855,17 @@ class EventBoth(Channel):
         Expected sustained maximum event rate (Hz).
     """
 
-    def __init__(self, fhand, chan_id, parent):
+    def __init__(self, fhand: int, chan_id: int, parent: "File") -> None:
         super().__init__(fhand, chan_id, parent)
 
-        self.fs = 1.0 / parent.time_base
+        self.fs: float = 1.0 / parent.time_base
         
         #??? How does this compare to the max time of the parent?
-        self.max_time = self.n_ticks / self.fs
-        self.ideal_rate = ffi.ideal_rate(fhand, chan_id)
+        self.max_time: float = self.n_ticks / self.fs
+        self.ideal_rate: float = ffi.ideal_rate(fhand, chan_id)
 
-    def get_times(self, time_range=None,
-                  max_events=1_000_000):
+    def get_times(self, time_range: Optional[tuple[float, float]] = None,
+                  max_events: int = 1_000_000) -> "LevelTimesResult":
         """
         Read level/toggle data from the channel.
 
@@ -922,10 +930,10 @@ class EventBoth(Channel):
 
 
     # Keep get_data as an alias
-    def get_data(self, **kwargs):
+    def get_data(self, **kwargs) -> "LevelTimesResult":
         return self.get_times(**kwargs)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return utils.print_object(self)
 
 @dataclass
@@ -942,16 +950,17 @@ class MarkerResult:
     n_events : int
     """
     times: np.ndarray
-    c1: object
-    c2: object
-    c3: object
-    c4: object
+    c1: Union[np.ndarray, list]
+    c2: Union[np.ndarray, list]
+    c3: Union[np.ndarray, list]
+    c4: Union[np.ndarray, list]
     n_events: int
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return utils.print_object(self)
 
-    def plot(self, label_code=1, ax=None, text_offset=0.02, **kwargs):
+    def plot(self, label_code: Optional[int] = 1, ax=None,
+             text_offset: float = 0.02, **kwargs) -> object:
         """
         Plot vertical lines at each marker time, optionally labeled.
     
@@ -993,14 +1002,15 @@ class Marker(Channel):
     Each marker has a 64-bit timestamp and four 8-bit codes.
     """
 
-    def __init__(self, fhand, chan_id, parent):
+    def __init__(self, fhand: int, chan_id: int, parent: "File") -> None:
         super().__init__(fhand, chan_id, parent)
 
-        self.fs = 1.0 / parent.time_base
-        self.max_time = self.n_ticks / self.fs
+        self.fs: float = 1.0 / parent.time_base
+        self.max_time: float = self.n_ticks / self.fs
 
-    def get_data(self, time_range=None, max_events=1_000_000,
-                 to_char=None):
+    def get_data(self, time_range: Optional[tuple[float, float]] = None,
+                 max_events: int = 1_000_000,
+                 to_char: Optional[bool] = None) -> "MarkerResult":
         """
         Read marker data from the channel.
 
@@ -1075,16 +1085,17 @@ class Marker(Channel):
             n_events=n_read,
         )
     
-    def __repr__(self):
+    def __repr__(self) -> str:
         return utils.print_object(self)
 
 
 class WaveMark(Channel):
 
-    def __init__(self, fhand, chan_id, parent):
+    def __init__(self, fhand: int, chan_id: int, parent: "File") -> None:
         super().__init__(fhand, chan_id, parent)
 
-    def get_data(self, time_range=None, max_events=1_000_000):
+    def get_data(self, time_range: Optional[tuple[float, float]] = None,
+                 max_events: int = 1_000_000):
         """
         Read wavemarks (AdcMark extended markers).
 
@@ -1106,10 +1117,11 @@ class WaveMark(Channel):
 
 class RealMark(Channel):
 
-    def __init__(self, fhand, chan_id, parent):
+    def __init__(self, fhand: int, chan_id: int, parent: "File") -> None:
         super().__init__(fhand, chan_id, parent)
 
-    def get_data(self, time_range=None, max_events=1_000_000):
+    def get_data(self, time_range: Optional[tuple[float, float]] = None,
+                 max_events: int = 1_000_000):
         """
         Read real markers (RealMark extended markers).
 
@@ -1131,14 +1143,15 @@ class RealMark(Channel):
 
 class TextMark(Channel):
 
-    def __init__(self, fhand, chan_id, parent):
+    def __init__(self, fhand: int, chan_id: int, parent: "File") -> None:
         super().__init__(fhand, chan_id, parent)
 
         # TextMark uses the file time base directly for fs
-        self.fs = 1.0 / parent.time_base
-        self.max_time = self.n_ticks / self.fs
+        self.fs: float = 1.0 / parent.time_base
+        self.max_time: float = self.n_ticks / self.fs
 
-    def get_data(self, time_range=None, max_events=1_000_000):
+    def get_data(self, time_range: Optional[tuple[float, float]] = None,
+                 max_events: int = 1_000_000):
         """
         Read text markers.
 

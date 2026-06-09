@@ -16,7 +16,7 @@ WaveMark - not done
 RealMark - not done
 TextMark - not done
 
-s2rx parsing - NYI
+s2rx parsing - implemented, needs to be tested
 
 PyPi - 
 
@@ -30,7 +30,7 @@ import os
 import errno
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 # Third Party
 import numpy as np
@@ -46,8 +46,16 @@ try:
 except ImportError:
     plt = None
 
+if TYPE_CHECKING:
+    # Imported for type checking only so matplotlib stays an optional
+    # runtime dependency.
+    from matplotlib.axes import Axes
 
-def read_file(file_path: Union[str, os.PathLike]) -> "File":
+# A filesystem path accepted throughout the public API.
+StrPath = Union[str, os.PathLike[str]]
+
+
+def read_file(file_path: StrPath) -> "File":
     """
     Preferred entry point for working with this module.
     """
@@ -70,7 +78,7 @@ class File():
     n_seconds : float
     """
 
-    def __init__(self, file_path: Union[str, os.PathLike], open_mode: int = 1) -> None:
+    def __init__(self, file_path: StrPath, open_mode: int = 1) -> None:
         """
         
         Parameters
@@ -147,7 +155,13 @@ class File():
         if all(x == 0 for x in temp):
             self.start_datetime = None
         else:
-            self.start_datetime = datetime(*reversed(temp))
+            # ffi.time_date returns a fixed 6-element tuple in the reverse
+            # of datetime()'s argument order. Indexing explicitly (instead
+            # of datetime(*reversed(temp))) keeps this type-checkable once
+            # ffi is typed, since datetime() rejects an unpacked
+            # variable-length iterable.
+            self.start_datetime = datetime(
+                temp[5], temp[4], temp[3], temp[2], temp[1], temp[0])
         #print(f"    {self.start_datetime}",flush=True)
     
         #print("[8] time_base...")
@@ -366,12 +380,13 @@ class Channel():
         time_base: float = parent.time_base
 
         # SampleRateInHz = 1.0 / (chan_div * time_base)
+        self.fs: float
         try:
             self.fs = 1.0 / (self.chan_div * time_base)
         except ZeroDivisionError:
             self.fs = float('nan')
 
-        self.max_time = parent.n_seconds
+        self.max_time: float = parent.n_seconds
 
         self.chan_offset = ffi.chan_offset(fhand, chan_id)
         self.scale = ffi.chan_scale(fhand, chan_id)
@@ -450,7 +465,7 @@ class ADC(Channel):
 
     def __init__(self, fhand: int, chan_id: int, parent: "File") -> None:
         super().__init__(fhand, chan_id, parent)
-        self.n_ticks: int = math.ceil(parent.n_ticks / self.chan_div)
+        self.n_ticks = math.ceil(parent.n_ticks / self.chan_div)
 
 
         """
@@ -679,7 +694,7 @@ class EventTimesResult:
     times: np.ndarray          # event times in seconds
     n_events: int
 
-    def plot(self, ax=None, **kwargs) -> object:
+    def plot(self, ax: "Axes | None" = None, **kwargs: Any) -> "Axes":
         if plt is None:
             raise ImportError("matplotlib required for plotting")
         if ax is None:
@@ -704,7 +719,7 @@ class LevelTimesResult:
     start_time: float 
     stop_time: float
     
-    def plot(self, ax=None, **kwargs) -> object:
+    def plot(self, ax: "Axes | None" = None, **kwargs: Any) -> "Axes":
         if plt is None:
             raise ImportError("matplotlib required for plotting")
         if ax is None:
@@ -776,8 +791,8 @@ class EventRiseOrFall(Channel):
     def __init__(self, fhand: int, chan_id: int, parent: "File", is_rise: bool) -> None:
         super().__init__(fhand, chan_id, parent)
 
-        self.fs: float = 1.0 / parent.time_base
-        self.max_time: float = self.n_ticks / self.fs
+        self.fs = 1.0 / parent.time_base
+        self.max_time = self.n_ticks / self.fs
         self.type: str = "rise" if is_rise else "fall"
         self.ideal_rate: float = ffi.ideal_rate(fhand, chan_id)
 
@@ -837,8 +852,13 @@ class EventRiseOrFall(Channel):
         return EventTimesResult(times=times, n_events=n_read)
 
     # Keep get_data as an alias for backward compat
-    def get_data(self, **kwargs) -> "EventTimesResult":
-        return self.get_times(**kwargs)
+    def get_data(self, time_range: Optional[tuple[float, float]] = None,
+                 time_format: str = 'numeric',
+                 max_events: int = 1_000_000) -> "EventTimesResult":
+        """Alias for get_times(), kept for backward compatibility."""
+        return self.get_times(time_range=time_range,
+                              time_format=time_format,
+                              max_events=max_events)
 
     def __repr__(self) -> str:
         return utils.print_object(self)
@@ -858,10 +878,10 @@ class EventBoth(Channel):
     def __init__(self, fhand: int, chan_id: int, parent: "File") -> None:
         super().__init__(fhand, chan_id, parent)
 
-        self.fs: float = 1.0 / parent.time_base
+        self.fs = 1.0 / parent.time_base
         
         #??? How does this compare to the max time of the parent?
-        self.max_time: float = self.n_ticks / self.fs
+        self.max_time = self.n_ticks / self.fs
         self.ideal_rate: float = ffi.ideal_rate(fhand, chan_id)
 
     def get_times(self, time_range: Optional[tuple[float, float]] = None,
@@ -930,8 +950,10 @@ class EventBoth(Channel):
 
 
     # Keep get_data as an alias
-    def get_data(self, **kwargs) -> "LevelTimesResult":
-        return self.get_times(**kwargs)
+    def get_data(self, time_range: Optional[tuple[float, float]] = None,
+                 max_events: int = 1_000_000) -> "LevelTimesResult":
+        """Alias for get_times(), kept for backward compatibility."""
+        return self.get_times(time_range=time_range, max_events=max_events)
 
     def __repr__(self) -> str:
         return utils.print_object(self)
@@ -950,17 +972,17 @@ class MarkerResult:
     n_events : int
     """
     times: np.ndarray
-    c1: Union[np.ndarray, list]
-    c2: Union[np.ndarray, list]
-    c3: Union[np.ndarray, list]
-    c4: Union[np.ndarray, list]
+    c1: Union[np.ndarray, list[str]]
+    c2: Union[np.ndarray, list[str]]
+    c3: Union[np.ndarray, list[str]]
+    c4: Union[np.ndarray, list[str]]
     n_events: int
 
     def __repr__(self) -> str:
         return utils.print_object(self)
 
-    def plot(self, label_code: Optional[int] = 1, ax=None,
-             text_offset: float = 0.02, **kwargs) -> object:
+    def plot(self, label_code: Optional[int] = 1, ax: "Axes | None" = None,
+             text_offset: float = 0.02, **kwargs: Any) -> "Axes":
         """
         Plot vertical lines at each marker time, optionally labeled.
     
@@ -1005,8 +1027,8 @@ class Marker(Channel):
     def __init__(self, fhand: int, chan_id: int, parent: "File") -> None:
         super().__init__(fhand, chan_id, parent)
 
-        self.fs: float = 1.0 / parent.time_base
-        self.max_time: float = self.n_ticks / self.fs
+        self.fs = 1.0 / parent.time_base
+        self.max_time = self.n_ticks / self.fs
 
     def get_data(self, time_range: Optional[tuple[float, float]] = None,
                  max_events: int = 1_000_000,
@@ -1095,7 +1117,7 @@ class WaveMark(Channel):
         super().__init__(fhand, chan_id, parent)
 
     def get_data(self, time_range: Optional[tuple[float, float]] = None,
-                 max_events: int = 1_000_000):
+                 max_events: int = 1_000_000) -> tuple[int, list[ffi.CEDWaveMark]]:
         """
         Read wavemarks (AdcMark extended markers).
 
@@ -1121,7 +1143,7 @@ class RealMark(Channel):
         super().__init__(fhand, chan_id, parent)
 
     def get_data(self, time_range: Optional[tuple[float, float]] = None,
-                 max_events: int = 1_000_000):
+                 max_events: int = 1_000_000) -> tuple[int, list[ffi.CEDRealMark]]:
         """
         Read real markers (RealMark extended markers).
 
@@ -1147,11 +1169,11 @@ class TextMark(Channel):
         super().__init__(fhand, chan_id, parent)
 
         # TextMark uses the file time base directly for fs
-        self.fs: float = 1.0 / parent.time_base
-        self.max_time: float = self.n_ticks / self.fs
+        self.fs = 1.0 / parent.time_base
+        self.max_time = self.n_ticks / self.fs
 
     def get_data(self, time_range: Optional[tuple[float, float]] = None,
-                 max_events: int = 1_000_000):
+                 max_events: int = 1_000_000) -> tuple[int, list[ffi.CEDTextMark]]:
         """
         Read text markers.
 

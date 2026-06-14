@@ -25,20 +25,49 @@ PyPi -
 from __future__ import annotations
 
 # Standard
+#------------------------------
 import math
 import os
 import errno
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional, Union
+import sys
+import platform
+import importlib
 
 # Third Party
+#------------------------------
 import numpy as np
 
 #Local
 #--------------------------
 from . import utils
-from . import ffi
+from .son_types import CEDWaveMark, CEDRealMark, CEDTextMark
+
+
+ffi1_found = False
+if platform.system() == "Windows":
+    #TODO: Check version of Python
+    from . import ffi as ffi_ceds64
+    ffi1_found = True
+else:
+    ffi_ceds64 = None
+
+ffi2_found = False
+if importlib.util.find_spec("sonpy") is not None:
+    from . import ffi_sonpy
+    ffi2_found = True
+else:
+    ffi_sonpy = None
+
+if not ffi1_found and not ffi2_found:
+    #TODO: Provide more details
+    #Windows - you should be good to go - local libraries
+    #Mac
+    raise Exception('Spike2 interface library not found')
+
+
 from .s2rx import S2rxFile
 
 try:
@@ -55,11 +84,11 @@ if TYPE_CHECKING:
 StrPath = Union[str, os.PathLike[str]]
 
 
-def read_file(file_path: StrPath) -> "File":
+def read_file(file_path: StrPath, backend: Literal["ceds64", "sonpy"] = "ceds64") -> "File":
     """
     Preferred entry point for working with this module.
     """
-    return File(file_path)
+    return File(file_path,backend=backend)
 
 
 class File():
@@ -78,7 +107,7 @@ class File():
     n_seconds : float
     """
 
-    def __init__(self, file_path: StrPath, open_mode: int = 1) -> None:
+    def __init__(self, file_path: StrPath, open_mode: int = 1, backend: Literal["ceds64", "sonpy"] = "ceds64") -> None:
         """
         
         Parameters
@@ -89,6 +118,11 @@ class File():
             -1 = try r/w then r-o.
         
         """
+
+        if backend == "ceds64":
+            self.ffi = ffi_ceds64    
+        else:
+            self.ffi = ffi_sonpy
         
         #Path verification
         #-----------------------------------------------
@@ -116,68 +150,68 @@ class File():
         else:
             self.meta_file = None
         
-        self.fhand = ffi.open(file_path, mode=open_mode)
+        self.fhand = self.ffi.open(file_path, mode=open_mode)
         if self.fhand < 0:
             file_path2 = repr(str(file_path))
             raise RuntimeError(
                 f"Failed to open '{file_path2}', error code {self.fhand}")
     
         #print("[2] version...",flush=True)
-        self.version = ffi.version(self.fhand)
+        self.version = self.ffi.version(self.fhand)
         #print(f"    {self.version}",flush=True)
     
         #print("[3] app_id...",flush=True)
-        self.app_id = ffi.app_id(self.fhand)
+        self.app_id = self.ffi.app_id(self.fhand)
         #print(f"    {self.app_id}",flush=True)
         
 
         #print("[4] file_size...",flush=True)
-        self.file_size = ffi.file_size(self.fhand)
+        self.file_size = self.ffi.file_size(self.fhand)
         #print(f"    {self.file_size}",flush=True)
     
         #print("[5] file_comments...",flush=True)
         comments = []
         for i in range(1, 9):
             #print(f"    comment {i}...",flush=True)
-            next_comment = ffi.file_comment(self.fhand, i)
+            next_comment = self.ffi.file_comment(self.fhand, i)
             if next_comment:
                 comments.append(next_comment)
         self.comments = comments
         #print(f"    {self.comments}",flush=True)
 
         #print("[6] max_time...",flush=True)
-        self.n_ticks = float(ffi.max_time(self.fhand))
+        self.n_ticks = float(self.ffi.max_time(self.fhand))
         #print(f"    {self.n_ticks}",flush=True)
     
         #print("[7] time_date...",flush=True)
-        temp = ffi.time_date(self.fhand)
+        temp = self.ffi.time_date(self.fhand)
         #print(f"    {temp}",flush=True)
         if all(x == 0 for x in temp):
             self.start_datetime = None
         else:
-            # ffi.time_date returns a fixed 6-element tuple in the reverse
+            # self.ffi.time_date returns a fixed 6-element tuple in the reverse
             # of datetime()'s argument order. Indexing explicitly (instead
             # of datetime(*reversed(temp))) keeps this type-checkable once
-            # ffi is typed, since datetime() rejects an unpacked
+            # self.ffi is typed, since datetime() rejects an unpacked
             # variable-length iterable.
             self.start_datetime = datetime(
                 temp[5], temp[4], temp[3], temp[2], temp[1], temp[0])
         #print(f"    {self.start_datetime}",flush=True)
     
         #print("[8] time_base...")
-        self.time_base = ffi.time_base(self.fhand)
+        self.time_base = self.ffi.time_base(self.fhand)
         #print(f"    {self.time_base}")
     
         self.n_seconds = self.n_ticks * self.time_base
         #print(f"    n_seconds = {self.n_seconds}")
     
         #print("[9] max_channels...")
-        n_chans_max = ffi.max_channels(self.fhand)
+        n_chans_max = self.ffi.max_channels(self.fhand)
         #print(f"    {n_chans_max}")
 
         
     
-        CT = ffi.ChanType
+        CT = self.ffi.ChanType
         chan_info = []
         chan_info.append(['id', 'idx', 'name', 'type'])
     
@@ -196,7 +230,7 @@ class File():
         #print("[10] channel loop...")
         for i in range(1, n_chans_max + 1):
             #print(f"    chan {i}: chan_type...", end="", flush=True)
-            chan_type = ffi.chan_type(self.fhand, i)
+            chan_type = self.ffi.chan_type(self.fhand, i)
             #print(f" {chan_type}", flush=True)
     
             if chan_type == CT.OFF:
@@ -247,7 +281,7 @@ class File():
     def close(self) -> None:
         """Close the underlying SON file."""
         if self.fhand is not None:
-            ffi.close(self.fhand)
+            self.ffi.close(self.fhand)
             self.fhand = None
 
     """
@@ -371,12 +405,12 @@ class Channel():
         self.chan_id: int = chan_id
         self.parent: "File" = parent
 
-        self.n_ticks: int = ffi.chan_max_time(fhand, chan_id)
-        self.name: str = ffi.chan_title(fhand, chan_id)
-        self.units: str = ffi.chan_units(fhand, chan_id).strip()
-        self.comment: str = ffi.chan_comment(fhand, chan_id)
+        self.n_ticks: int = self.ffi.chan_max_time(fhand, chan_id)
+        self.name: str = self.ffi.chan_title(fhand, chan_id)
+        self.units: str = self.ffi.chan_units(fhand, chan_id).strip()
+        self.comment: str = self.ffi.chan_comment(fhand, chan_id)
 
-        self.chan_div: int = ffi.chan_divide(fhand, chan_id)
+        self.chan_div: int = self.ffi.chan_divide(fhand, chan_id)
         time_base: float = parent.time_base
 
         # SampleRateInHz = 1.0 / (chan_div * time_base)
@@ -388,10 +422,10 @@ class Channel():
 
         self.max_time: float = parent.n_seconds
 
-        self.chan_offset = ffi.chan_offset(fhand, chan_id)
-        self.scale = ffi.chan_scale(fhand, chan_id)
+        self.chan_offset = self.ffi.chan_offset(fhand, chan_id)
+        self.scale = self.ffi.chan_scale(fhand, chan_id)
 
-        y1, y2 = ffi.chan_y_range(fhand, chan_id)
+        y1, y2 = self.ffi.chan_y_range(fhand, chan_id)
         self.y_range = [y1, y2]
 
     def __repr__(self) -> str:
@@ -487,10 +521,10 @@ class ADC(Channel):
         s2_ticks = s2 * self.chan_div + 1  # +1: request is non-inclusive
 
         if read_scaled:
-            n_read, data, start_tick = ffi.read_wave_f(
+            n_read, data, start_tick = self.ffi.read_wave_f(
                 self.fhand, self.chan_id, n_samples, s1_ticks, s2_ticks)
         else:
-            n_read, data, start_tick = ffi.read_wave_s(
+            n_read, data, start_tick = self.ffi.read_wave_s(
                 self.fhand, self.chan_id, n_samples, s1_ticks, s2_ticks)
 
         start_sample = int(start_tick / self.chan_div)
@@ -598,7 +632,7 @@ class ADC(Channel):
         #  f"n_samples={n_samples}, s1_ticks={s1_ticks}, s2_ticks={s2_ticks})",
         #  flush=True)
  
-        n_read, data, start_tick = ffi.read_wave_s(
+        n_read, data, start_tick = self.ffi.read_wave_s(
             self.fhand, self.chan_id, n_samples, s1_ticks, s2_ticks)
         
         
@@ -794,7 +828,7 @@ class EventRiseOrFall(Channel):
         self.fs = 1.0 / parent.time_base
         self.max_time = self.n_ticks / self.fs
         self.type: str = "rise" if is_rise else "fall"
-        self.ideal_rate: float = ffi.ideal_rate(fhand, chan_id)
+        self.ideal_rate: float = self.ffi.ideal_rate(fhand, chan_id)
 
     def get_times(self, time_range: Optional[tuple[float, float]] = None,
                   time_format: str = 'numeric',
@@ -832,7 +866,7 @@ class EventRiseOrFall(Channel):
         # +1 because DLL end is non-inclusive
         t2 = t2 + 1
 
-        n_read, raw_times = ffi.read_events(
+        n_read, raw_times = self.ffi.read_events(
             self.fhand, self.chan_id, max_events, t1, t2)
 
         if n_read < 0:
@@ -882,7 +916,7 @@ class EventBoth(Channel):
         
         #??? How does this compare to the max time of the parent?
         self.max_time = self.n_ticks / self.fs
-        self.ideal_rate: float = ffi.ideal_rate(fhand, chan_id)
+        self.ideal_rate: float = self.ffi.ideal_rate(fhand, chan_id)
 
     def get_times(self, time_range: Optional[tuple[float, float]] = None,
                   max_events: int = 1_000_000) -> "LevelTimesResult":
@@ -926,7 +960,7 @@ class EventBoth(Channel):
         # +1: DLL end is non-inclusive
         t2 = t2 + 1
 
-        n_read, raw_times, start_level = ffi.read_levels(
+        n_read, raw_times, start_level = self.ffi.read_levels(
             self.fhand, self.chan_id, max_events, t1, t2)
 
         start_level = int(start_level)
@@ -1075,7 +1109,7 @@ class Marker(Channel):
         # +1: DLL end is non-inclusive
         t2 = t2 + 1
 
-        n_read, markers = ffi.read_markers(
+        n_read, markers = self.ffi.read_markers(
             self.fhand, self.chan_id, max_events, t1, t2)
 
         if n_read < 0:
@@ -1117,23 +1151,23 @@ class WaveMark(Channel):
         super().__init__(fhand, chan_id, parent)
 
     def get_data(self, time_range: Optional[tuple[float, float]] = None,
-                 max_events: int = 1_000_000) -> tuple[int, list[ffi.CEDWaveMark]]:
+                 max_events: int = 1_000_000) -> tuple[int, list[CEDWaveMark]]:
         """
         Read wavemarks (AdcMark extended markers).
 
         Returns
         -------
         n_read : int
-        markers : list of ffi.CEDWaveMark
+        markers : list of CEDWaveMark
         """
         if time_range is not None:
-            t_from = ffi.secs_to_ticks(self.fhand, time_range[0])
-            t_to = ffi.secs_to_ticks(self.fhand, time_range[1])
+            t_from = self.ffi.secs_to_ticks(self.fhand, time_range[0])
+            t_to = self.ffi.secs_to_ticks(self.fhand, time_range[1])
         else:
             t_from = 0
             t_to = -1
 
-        return ffi.read_ext_marks(
+        return self.ffi.read_ext_marks(
             self.fhand, self.chan_id, max_events, t_from, t_to)
 
 
@@ -1143,23 +1177,23 @@ class RealMark(Channel):
         super().__init__(fhand, chan_id, parent)
 
     def get_data(self, time_range: Optional[tuple[float, float]] = None,
-                 max_events: int = 1_000_000) -> tuple[int, list[ffi.CEDRealMark]]:
+                 max_events: int = 1_000_000) -> tuple[int, list[CEDRealMark]]:
         """
         Read real markers (RealMark extended markers).
 
         Returns
         -------
         n_read : int
-        markers : list of ffi.CEDRealMark
+        markers : list of CEDRealMark
         """
         if time_range is not None:
-            t_from = ffi.secs_to_ticks(self.fhand, time_range[0])
-            t_to = ffi.secs_to_ticks(self.fhand, time_range[1])
+            t_from = self.ffi.secs_to_ticks(self.fhand, time_range[0])
+            t_to = self.ffi.secs_to_ticks(self.fhand, time_range[1])
         else:
             t_from = 0
             t_to = -1
 
-        return ffi.read_ext_marks(
+        return self.ffi.read_ext_marks(
             self.fhand, self.chan_id, max_events, t_from, t_to)
 
 
@@ -1173,7 +1207,7 @@ class TextMark(Channel):
         self.max_time = self.n_ticks / self.fs
 
     def get_data(self, time_range: Optional[tuple[float, float]] = None,
-                 max_events: int = 1_000_000) -> tuple[int, list[ffi.CEDTextMark]]:
+                 max_events: int = 1_000_000) -> tuple[int, list[CEDTextMark]]:
         """
         Read text markers.
 
@@ -1187,14 +1221,14 @@ class TextMark(Channel):
         Returns
         -------
         n_read : int
-        markers : list of ffi.CEDTextMark
+        markers : list of CEDTextMark
         """
         if time_range is not None:
-            t_from = ffi.secs_to_ticks(self.fhand, time_range[0])
-            t_to = ffi.secs_to_ticks(self.fhand, time_range[1])
+            t_from = self.ffi.secs_to_ticks(self.fhand, time_range[0])
+            t_to = self.ffi.secs_to_ticks(self.fhand, time_range[1])
         else:
             t_from = 0
             t_to = -1
 
-        return ffi.read_ext_marks(
+        return self.ffi.read_ext_marks(
             self.fhand, self.chan_id, max_events, t_from, t_to)

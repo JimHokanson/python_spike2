@@ -70,11 +70,24 @@ Key structural differences between the two APIs and how they are bridged:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from enum import IntEnum
+#Standard
+#---------------------------
 from typing import Dict, List, Optional, Tuple, Union
 
+#Third
+#---------------------------
 import numpy as np
+
+#Local
+#---------------------------
+from .son_types import (
+    ChanType,
+    CEDMarker,
+    CEDTextMark,
+    CEDRealMark,
+    CEDWaveMark,
+    CEDExtMark,
+)
 
 # ---------------------------------------------------------------------------
 # Import sonpy, supporting both the new (sonpy.X) and old (sonpy.lib.X) layouts
@@ -98,107 +111,6 @@ else:  # pragma: no cover
     raise ImportError(
         "Could not locate SonFile in the installed sonpy package. Tried "
         "sonpy.SonFile and sonpy.lib.SonFile."
-    )
-
-
-# ---------------------------------------------------------------------------
-# Constants / enums  (kept byte-for-byte compatible with ffi.py)
-# ---------------------------------------------------------------------------
-
-class ChanType(IntEnum):
-    """
-    Channel type codes returned by :func:`chan_type`.
-
-    These integer values match the native SON ``TDataKind`` ordering, which is
-    *also* what ``sonpy.DataType`` uses, so a sonpy ``DataType`` and this enum
-    share the same integer values (see ``_DATATYPE_TO_CHANTYPE``).
-
-        0 no channel / off
-        1 Waveform (Adc, int16)
-        2 Event (falling)
-        3 Event (rising)
-        4 Event (both)
-        5 Marker
-        6 Wavemark   (AdcMark)
-        7 Realmark   (RealMark)
-        8 TextMark
-        9 Realwave   (float32)
-    """
-    OFF = 0
-    ADC = 1
-    EVENT_FALL = 2
-    EVENT_RISE = 3
-    EVENT_BOTH = 4
-    MARKER = 5
-    ADC_MARK = 6
-    REAL_MARK = 7
-    TEXT_MARK = 8
-    REAL_WAVE = 9
-
-
-# Map sonpy.DataType members -> our ChanType. Built by *name* so it does not
-# rely on sonpy enums supporting int() conversion. The names are identical in
-# both enums (Off/Adc/EventFall/EventRise/EventBoth/Marker/AdcMark/RealMark/
-# TextMark/RealWave); see psonfile.h in the sonpy docs.
-_DT_NAME_TO_CHANTYPE = {
-    "Off": ChanType.OFF,
-    "Adc": ChanType.ADC,
-    "EventFall": ChanType.EVENT_FALL,
-    "EventRise": ChanType.EVENT_RISE,
-    "EventBoth": ChanType.EVENT_BOTH,
-    "Marker": ChanType.MARKER,
-    "AdcMark": ChanType.ADC_MARK,
-    "RealMark": ChanType.REAL_MARK,
-    "TextMark": ChanType.TEXT_MARK,
-    "RealWave": ChanType.REAL_WAVE,
-}
-
-# Concrete sonpy.DataType member -> ChanType (resolved at import).
-_DATATYPE_TO_CHANTYPE = {}
-for _name, _ct in _DT_NAME_TO_CHANTYPE.items():
-    _member = getattr(sp.DataType, _name, None)
-    if _member is not None:
-        _DATATYPE_TO_CHANTYPE[_member] = _ct
-
-
-# ---------------------------------------------------------------------------
-# Python-side marker data classes (identical to ffi.py so main.py's
-# `ffi.CEDMarker`, `ffi.CEDWaveMark`, ... type references keep working).
-# ---------------------------------------------------------------------------
-
-@dataclass
-class CEDMarker:
-    """A basic marker: 64-bit timestamp plus four 8-bit codes."""
-    time: int = 0
-    code1: int = 0
-    code2: int = 0
-    code3: int = 0
-    code4: int = 0
-
-    @property
-    def codes(self) -> Tuple[int, int, int, int]:
-        return (self.code1, self.code2, self.code3, self.code4)
-
-
-@dataclass
-class CEDTextMark(CEDMarker):
-    """A marker with attached text data."""
-    data: str = ""
-
-
-@dataclass
-class CEDRealMark(CEDMarker):
-    """A marker with attached float32 data (rows x cols)."""
-    data: np.ndarray = field(
-        default_factory=lambda: np.empty((0, 0), dtype=np.float32)
-    )
-
-
-@dataclass
-class CEDWaveMark(CEDMarker):
-    """A marker with attached int16 waveform data (rows x cols)."""
-    data: np.ndarray = field(
-        default_factory=lambda: np.empty((0, 0), dtype=np.int16)
     )
 
 
@@ -912,9 +824,13 @@ def read_markers(fhand: int, chan: int, n_max: int, t_from: int,
 # -- Extended marker read / write -----------------------------------
 
 def read_ext_marks(
-    fhand: int, chan: int, n_max: int, t_from: int,
-    t_to: int = -1, mask: int = -1,
-) -> Tuple[int, List[Union[CEDTextMark, CEDRealMark, CEDWaveMark]]]:
+    fhand: int,
+    chan: int,
+    n_max: int,
+    t_from: int,
+    t_to: int = -1,
+    mask: int = -1,
+) -> Tuple[int, List[CEDExtMark]]:
     """
     Read extended markers from a WaveMark (AdcMark), RealMark or TextMark
     channel. Returns ``(n_read, list_of_extended_markers)``.

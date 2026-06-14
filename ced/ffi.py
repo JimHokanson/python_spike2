@@ -7,14 +7,28 @@ Created on Sat May 23 06:47:19 2026
 
 from __future__ import annotations
 
+#Standard
+#----------------------
 import os
 import platform
-from dataclasses import dataclass, field
-from enum import IntEnum
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
  
+#Third 
+#----------------------
 import numpy as np
+
+#Local
+#----------------------
+from .son_types import (
+    ChanType,
+    CEDMarker,
+    CEDTextMark,
+    CEDRealMark,
+    CEDWaveMark,
+    CEDExtMark,
+)
+
 # ---------------------------------------------------------------------------
 # Import the compiled extension
 # ---------------------------------------------------------------------------
@@ -27,9 +41,11 @@ _ARCH_DIR = os.path.join(_THIS_DIR,_PLATFORM_FOLDER)
 # Python 3.8+ requires explicit DLL directories
 if hasattr(os, "add_dll_directory"):
     os.add_dll_directory(str(_ARCH_DIR))
+
 # Also add to PATH as a fallback for older Python / ctypes loads
 os.environ["PATH"] = str(_ARCH_DIR) + os.pathsep + os.environ.get("PATH", "")
 
+#This needs to be done after the path manipulation work
 from ._ceds64_cffi import ffi, lib
 
 
@@ -37,95 +53,10 @@ from ._ceds64_cffi import ffi, lib
 # Constants / enums
 # ---------------------------------------------------------------------------
 
-class ChanType(IntEnum):
-    """
-    Channel type codes returned by :func:`chan_type`.
-    """
-    
-    """
-    %   iType - 0 no channel
-    %           1 Waveform channel
-    %           2 Event (falling)
-    %           3 Event (rising)
-    %           4 Event (both)
-    %           5 Marker
-    %           6 Wavemark
-    %           7 Realmark
-    %           8 TextMark
-    %           9 Realwave
-    %           or a negative error code
-    """
-    
-    OFF = 0
-    ADC = 1
-    EVENT_FALL = 2
-    EVENT_RISE = 3
-    EVENT_BOTH = 4
-    MARKER = 5
-    ADC_MARK = 6
-    REAL_MARK = 7
-    TEXT_MARK = 8
-    REAL_WAVE = 9
-
-
 # ---------------------------------------------------------------------------
 # Python-side marker data classes
 # ---------------------------------------------------------------------------
 
-@dataclass
-class CEDMarker:
-    """A basic marker: 64-bit timestamp plus four 8-bit codes."""
-    time: int = 0
-    code1: int = 0
-    code2: int = 0
-    code3: int = 0
-    code4: int = 0
-
-    @property
-    def codes(self) -> Tuple[int, int, int, int]:
-        return (self.code1, self.code2, self.code3, self.code4)
-
-    def _to_c(self):
-        """Return a cffi S64Marker cdata object."""
-        m = ffi.new("S64Marker *")
-        m.m_Time = self.time
-        m.m_Code1 = self.code1
-        m.m_Code2 = self.code2
-        m.m_Code3 = self.code3
-        m.m_Code4 = self.code4
-        return m
-
-    @classmethod
-    def _from_c(cls, m) -> "CEDMarker":
-        return cls(
-            time=m.m_Time,
-            code1=m.m_Code1,
-            code2=m.m_Code2,
-            code3=m.m_Code3,
-            code4=m.m_Code4,
-        )
-
-
-@dataclass
-class CEDTextMark(CEDMarker):
-    """A marker with attached text data."""
-    data: str = ""
-
-
-@dataclass
-class CEDRealMark(CEDMarker):
-    """A marker with attached float32 data (rows × cols)."""
-    data: np.ndarray = field(
-        default_factory=lambda: np.empty((0, 0), dtype=np.float32)
-    )
-
-
-@dataclass
-class CEDWaveMark(CEDMarker):
-    """A marker with attached int16 waveform data (rows × cols)."""
-    data: np.ndarray = field(
-        default_factory=lambda: np.empty((0, 0), dtype=np.int16)
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +89,27 @@ def _np_from_buf(buf, dtype, count):
         ffi_buffer = ffi.buffer(buf, count * np.dtype(dtype).itemsize)
         return np.frombuffer(ffi_buffer, dtype=dtype).copy()
 
+
+def _marker_to_c(marker: CEDMarker):
+    """Convert a shared CEDMarker object to a cffi S64Marker *."""
+    m = ffi.new("S64Marker *")
+    m.m_Time = marker.time
+    m.m_Code1 = marker.code1
+    m.m_Code2 = marker.code2
+    m.m_Code3 = marker.code3
+    m.m_Code4 = marker.code4
+    return m
+
+
+def _marker_from_c(m) -> CEDMarker:
+    """Convert a cffi S64Marker struct to a shared CEDMarker object."""
+    return CEDMarker(
+        time=m.m_Time,
+        code1=m.m_Code1,
+        code2=m.m_Code2,
+        code3=m.m_Code3,
+        code4=m.m_Code4,
+    )
 
 # ===================================================================
 # Public API
@@ -1036,28 +988,29 @@ def read_markers(fhand: int, chan: int, n_max: int, t_from: int,
     #JAH: This may be slow/overkill compared to simply mapping
     #to an array.
     if n_read > 0:
-        return n_read, [CEDMarker._from_c(buf[i]) for i in range(n_read)]
+        return n_read, [_marker_from_c(buf[i]) for i in range(n_read)]
     return n_read, []
 
 
 def edit_marker(fhand: int, chan: int, time: int,
                 marker: CEDMarker) -> int:
     """Replace the codes of an existing marker at *time*."""
-    m = marker._to_c()
+    m = _marker_to_c(marker)
     return lib.S64EditMarker(fhand, chan, time, m)
 
 
 # ── Extended marker read / write ──────────────────────────────────
 
 def write_ext_marks(
-    fhand: int, chan: int,
-    markers: List[Union[CEDTextMark, CEDRealMark, CEDWaveMark]],
+    fhand: int,
+    chan: int,
+    markers: List[CEDExtMark],
 ) -> int:
     """Write extended markers one at a time."""
     ct = lib.S64ChanType(fhand, chan)
 
     for mk in markers:
-        cm = mk._to_c()
+        cm = _marker_to_c(mk)
 
         if ct == ChanType.TEXT_MARK:
             raw = mk.data.encode() if isinstance(mk.data, str) else mk.data
@@ -1072,6 +1025,7 @@ def write_ext_marks(
             d = np.ascontiguousarray(mk.data, dtype=np.int16).ravel()
             buf = ffi.from_buffer("short[]", d)
             ret = lib.S64Write1WaveMark(fhand, chan, cm, buf, len(d))
+
         else:
             return -1
 
@@ -1082,9 +1036,13 @@ def write_ext_marks(
 
 
 def read_ext_marks(
-    fhand: int, chan: int, n_max: int, t_from: int,
-    t_to: int = -1, mask: int = -1,
-) -> Tuple[int, List[Union[CEDTextMark, CEDRealMark, CEDWaveMark]]]:
+    fhand: int,
+    chan: int,
+    n_max: int,
+    t_from: int,
+    t_to: int = -1,
+    mask: int = -1,
+) -> Tuple[int, List[CEDExtMark]]:
     """
     CEDS64ReadExtMarks
     Read extended markers from a TextMark, RealMark, or WaveMark channel.

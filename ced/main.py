@@ -32,7 +32,6 @@ import errno
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional, Union
-import sys
 import platform
 import importlib
 
@@ -44,6 +43,7 @@ import numpy as np
 #--------------------------
 from . import utils
 from .son_types import CEDWaveMark, CEDRealMark, CEDTextMark
+from .s2rx import S2rxFile
 
 
 ffi1_found = False
@@ -68,7 +68,6 @@ if not ffi1_found and not ffi2_found:
     raise Exception('Spike2 interface library not found')
 
 
-from .s2rx import S2rxFile
 
 try:
     from matplotlib import pyplot as plt
@@ -120,9 +119,20 @@ class File():
         """
 
         if backend == "ceds64":
-            self.ffi = ffi_ceds64    
-        else:
+            if ffi_ceds64 is None:
+                raise ImportError("The 'ceds64' backend is not available.")
+            self.ffi = ffi_ceds64
+
+        elif backend == "sonpy":
+            if ffi_sonpy is None:
+                raise ImportError("The 'sonpy' backend is not available.")
             self.ffi = ffi_sonpy
+
+        else:
+            raise ValueError(
+                f"Unsupported backend {backend!r}. "
+                "Expected 'ceds64' or 'sonpy'."
+            )
         
         #Path verification
         #-----------------------------------------------
@@ -404,6 +414,7 @@ class Channel():
         self.fhand: int = fhand
         self.chan_id: int = chan_id
         self.parent: "File" = parent
+        self.ffi = parent.ffi
 
         self.n_ticks: int = self.ffi.chan_max_time(fhand, chan_id)
         self.name: str = self.ffi.chan_title(fhand, chan_id)

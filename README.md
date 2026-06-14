@@ -25,6 +25,8 @@ CED provides an official Python package, [sonpy](https://pypi.org/project/sonpy/
 
 ## Installation
 
+**This doesn't work just yet. Adding some last minute support for an updated sonpy package then I'll publish. In the meantime the code can be cloned but it is a moving target**
+
 ```bash
 pip install spike2io
 ```

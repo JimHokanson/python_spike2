@@ -238,7 +238,7 @@ def version(fhand: int) -> int:
     File format version (major*256 + minor)."""
     
     
-    """
+    r"""
     //! Get the version of the data file
     /*!
     The returned value is the major file system version * 256 + the minor version. The
@@ -796,9 +796,9 @@ def read_wave_s(fhand: int, chan: int, n_max: int, t_from: int,
     """
     
     
-    """
+    r"""
     \param nFid An integer file handle (1-8)
-    \param nChan The waveform channel to read. This can be either Adc or RealWave. 
+    \param nChan The waveform channel to read. This can be either Adc or RealWave.
     \param pData The buffer to receive the read data.
     \param nMax The maximum number of values to read.
     \param tFrom This and tUpto define a time range in which to locate the data to read. The first data point will
@@ -937,7 +937,7 @@ def write_markers(fhand: int, chan: int,
 def read_markers(fhand: int, chan: int, n_max: int, t_from: int,
                  t_to: int = -1, mask: int = -1,
                  ) -> Tuple[int, List[CEDMarker]]:
-    """
+    r"""
     Read markers. Returns (n_read, list_of_CEDMarker).
     
     

@@ -18,20 +18,19 @@ If --dll-path is omitted, the script looks for the DLLs in the ceds64
 package directory (i.e. place x64/ next to ceds64.py).
 """
 
-fp = r"C:\Users\Jim\OneDrive - mcw.edu\Robilotto, Gabriella's files - Cystometry files\08272025_Cystometry_Cage 555_1R.smr"
-
-
 import ced
 import os
 
-root = r"C:\repos\data\spike2_example_files\files"
+root = r"E:\repos\data\spike2_example_files\files"
 
 
 #demo1 - ADC with multiple start/stops and one event rise
 #---------------------------------------------------------
 fp = os.path.join(root,"demo1.smr")
 
-f = ced.read_file(fp)
+f = ced.read_file(fp,backend="sonpy")
+#f = ced.read_file(fp,backend="ceds64")
+
 
 w = f.waveforms[0]
 

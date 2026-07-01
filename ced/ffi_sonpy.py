@@ -115,6 +115,36 @@ else:  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------
+# DataType (sonpy) -> ChanType (this package) mapping
+# ---------------------------------------------------------------------------
+# sonpy's ``DataType`` enum uses the same integer codes as the CED SON channel
+# types (Off=0, Adc=1, EventFall=2, EventRise=3, EventBoth=4, Marker=5,
+# AdcMark=6, RealMark=7, TextMark=8, RealWave=9), which is exactly how
+# ``ChanType`` is defined in son_types.py. We therefore pair them by integer
+# value. The tables are built dynamically so they track whatever members the
+# installed sonpy actually exposes, and are looked up by both enum-member
+# identity (_DATATYPE_TO_CHANTYPE) and member name (_DT_NAME_TO_CHANTYPE) by
+# chan_type().
+_DATATYPE_TO_CHANTYPE: Dict[object, ChanType] = {}
+_DT_NAME_TO_CHANTYPE: Dict[str, ChanType] = {}
+for _name in dir(sp.DataType):
+    if _name.startswith("_"):
+        continue
+    _member = getattr(sp.DataType, _name)
+    try:
+        _code = int(_member)
+    except (TypeError, ValueError):
+        continue  # skip non-member attributes such as 'name'/'value'
+    try:
+        _ct = ChanType(_code)
+    except ValueError:
+        continue  # sonpy code with no ChanType equivalent
+    _DATATYPE_TO_CHANTYPE[_member] = _ct
+    _DT_NAME_TO_CHANTYPE[_name] = _ct
+del _name, _member, _code, _ct
+
+
+# ---------------------------------------------------------------------------
 # Handle registry  (int handle  <->  sonpy.SonFile object)
 # ---------------------------------------------------------------------------
 
@@ -339,6 +369,11 @@ def file_comment(fhand: int, index: int,
     sonfile = _get(fhand)
     idx0 = int(index) - 1
     old = str(sonfile.GetFileComment(idx0))
+    # sonpy returns the raw fixed-size comment buffer, which for *empty* comment
+    # slots can contain leftover bytes after a leading NUL (e.g. '\x00onverted
+    # from CFS...'). Apply C-string semantics and keep only the text up to the
+    # first NUL, so empty slots come back as '' like the ceds64 backend.
+    old = old.split("\x00", 1)[0]
     if new_comment is not None:
         sonfile.SetFileComment(idx0, str(new_comment))
     return old
@@ -415,8 +450,29 @@ def chan_type(fhand: int, chan: int) -> ChanType:
 
 
 def chan_divide(fhand: int, chan: int) -> int:
-    """Sample interval in file ticks (waveform channels)."""
-    return int(_get(fhand).ChannelDivide(chan - 1))
+    """
+    Sample interval in file ticks.
+
+    ``chan_div`` is only physically meaningful for sampled channels (Adc,
+    RealWave and AdcMark/WaveMark); for those, sonpy and ceds64 already agree
+    and we return sonpy's value directly.
+
+    For non-sampled channels (events, markers, levels, text/real marks) the
+    value is not meaningful and the two backends diverge: sonpy's
+    ``ChannelDivide`` always returns 1, whereas the native ``S64ChanDivide``
+    returns 0 for 64-bit (.smrx) files but 1 for 32-bit (.smr) files. We mirror
+    that format-dependent behaviour -- keyed off the documented version
+    boundary (>= 256 == 64-bit filing system) -- so the backends report
+    identical ``chan_div`` (and hence identical ``Channel.fs``) on both formats.
+    """
+    sonfile = _get(fhand)
+    ct = chan_type(fhand, chan)
+    if ct in (ChanType.ADC, ChanType.REAL_WAVE, ChanType.ADC_MARK):
+        return int(sonfile.ChannelDivide(chan - 1))
+    # Non-sampled channel: match ceds64's format-dependent value.
+    if version(fhand) >= 256:        # 64-bit (.smrx)
+        return 0
+    return int(sonfile.ChannelDivide(chan - 1))
 
 
 def ideal_rate(fhand: int, chan: int,
@@ -747,26 +803,37 @@ def read_levels(fhand: int, chan: int, n_max: int, t_from: int,
     Read level/toggle times from an EventBoth channel.
     Returns ``(n_read, int64_times, initial_level)``.
 
-    sonpy reads EventBoth channels with ``ReadEvents`` (it returns the toggle
-    times). The native ``S64ReadLevels`` also reports the *initial level*
-    (the level in force just before the first returned transition); sonpy
-    exposes ``SetInitialLevel`` but **no getter**, so the initial level cannot
-    be recovered through the documented API.
+    The native ``S64ReadLevels`` reports the transition times *and* the initial
+    level (the level in force just before the first returned transition).
+    sonpy exposes ``SetInitialLevel`` but no getter, so we recover the level a
+    different way: reading the channel with ``ReadMarkers`` yields a DigMark per
+    transition whose ``Code1`` holds the level the signal switches *to*
+    (0=low, 1=high). The initial level is therefore the opposite of the first
+    transition's resulting level, i.e. ``1 - marks[0].Code1``. The transition
+    ticks (``Tick``) are identical to what ``ReadEvents`` returns.
 
-    => We return ``initial_level = 0`` (low). For channels that actually start
-       high this will invert the square-wave reconstruction in
-       EventBoth.plot(). Flagged for follow-up.
-       # VERIFY: whether a live sonpy build exposes any level getter; if not,
-       # the initial level may have to be inferred from context.
+    If the channel has no transitions in range we fall back to ``initial_level
+    = 0`` (there is nothing to invert and no level to report).
     """
     sonfile = _get(fhand)
     tupto = _resolve_tupto(sonfile, t_to)
-    raw = np.asarray(sonfile.ReadEvents(chan - 1, int(n_max), int(t_from), tupto))
-    arr = np.ascontiguousarray(raw, dtype=np.int64)
-    if arr.size == 1 and arr[0] < 0:
-        return int(arr[0]), np.empty(0, dtype=np.int64), 0
-    initial_level = 0   # see docstring -- not queryable via sonpy
-    return arr.size, arr, initial_level
+    marks = sonfile.ReadMarkers(chan - 1, int(n_max), int(t_from), tupto)
+    marks = list(marks) if marks is not None else []
+
+    # Error form: a single marker whose tick is a negative error code.
+    if len(marks) == 1:
+        try:
+            if int(marks[0].Tick) < 0:
+                return int(marks[0].Tick), np.empty(0, dtype=np.int64), 0
+        except AttributeError:
+            pass
+
+    times = np.array([int(m.Tick) for m in marks], dtype=np.int64)
+    if times.size:
+        initial_level = 1 - (int(marks[0].Code1) & 1)
+    else:
+        initial_level = 0
+    return times.size, times, initial_level
 
 
 # -- Marker read / write --------------------------------------------
@@ -847,44 +914,50 @@ def read_ext_marks(
 
     results: list = []
 
+    # sonpy 1.9.12 reality (verified against a live install):
+    #   * The per-marker objects are RealMarker / WaveMarker / TextMarker.
+    #   * They expose the timestamp and codes directly as ``.Tick`` and
+    #     ``.Code1``..``.Code4`` (NOT via a ``.GetMark()`` accessor, which does
+    #     not exist), so we read those fields with ``_digmark_fields``.
+    #   * TextMarker exposes its string via ``.GetString()``.
+    #   * RealMarker / WaveMarker print their numeric payload in ``repr`` but
+    #     expose **no** Python attribute for it (no ``.Data`` / ``GetData``),
+    #     and trying to index / buffer-protocol the object crashes the
+    #     interpreter. So the sample/real payload cannot currently be recovered
+    #     through the sonpy backend: ``data`` is returned empty and the caller
+    #     should treat that as "payload unavailable on this backend".
+    #     # LIMITATION: RealMark/WaveMark sample data via sonpy 1.9.12.
+
+    def _is_error_sentinel(seq) -> bool:
+        return len(seq) == 1 and int(seq[0].Tick) < 0
+
     if ct == ChanType.ADC_MARK:
-        raw = sonfile.ReadWaveMarks(chan - 1, int(n_max), int(t_from), tupto)
-        for wm in (raw or []):
-            dm = wm.GetMark()
-            t, c1, c2, c3, c4 = _digmark_fields(dm)
-            if len(raw) == 1 and t < 0:            # error sentinel
-                return t, []
-            # WaveMarker.Data is a list of rows, each a list of `cols` shorts.
-            data = np.array(wm.Data, dtype=np.int16)
-            if data.ndim == 1 and rows and cols:
-                data = data.reshape(rows, cols)
+        raw = sonfile.ReadWaveMarks(chan - 1, int(n_max), int(t_from), tupto) or []
+        if _is_error_sentinel(raw):
+            return int(raw[0].Tick), []
+        for wm in raw:
+            t, c1, c2, c3, c4 = _digmark_fields(wm)
+            data = np.empty((0, 0), dtype=np.int16)  # see LIMITATION above
             results.append(CEDWaveMark(time=t, code1=c1, code2=c2,
                                        code3=c3, code4=c4, data=data))
 
     elif ct == ChanType.REAL_MARK:
-        raw = sonfile.ReadRealMarks(chan - 1, int(n_max), int(t_from), tupto)
-        for rm in (raw or []):
-            dm = rm.GetMark()
-            t, c1, c2, c3, c4 = _digmark_fields(dm)
-            if len(raw) == 1 and t < 0:
-                return t, []
-            data = np.array(rm.Data, dtype=np.float32)
-            # RealMark is single-column; present as (rows, cols) for parity.
-            if rows and cols:
-                data = data.reshape(rows, cols)
-            else:
-                data = data.reshape(-1, 1)
+        raw = sonfile.ReadRealMarks(chan - 1, int(n_max), int(t_from), tupto) or []
+        if _is_error_sentinel(raw):
+            return int(raw[0].Tick), []
+        for rm in raw:
+            t, c1, c2, c3, c4 = _digmark_fields(rm)
+            data = np.empty((0, 0), dtype=np.float32)  # see LIMITATION above
             results.append(CEDRealMark(time=t, code1=c1, code2=c2,
                                        code3=c3, code4=c4, data=data))
 
     elif ct == ChanType.TEXT_MARK:
-        raw = sonfile.ReadTextMarks(chan - 1, int(n_max), int(t_from), tupto)
-        for tm in (raw or []):
-            dm = tm.GetMark()
-            t, c1, c2, c3, c4 = _digmark_fields(dm)
-            if len(raw) == 1 and t < 0:
-                return t, []
-            text = tm.Text if hasattr(tm, "Text") else tm.GetString()
+        raw = sonfile.ReadTextMarks(chan - 1, int(n_max), int(t_from), tupto) or []
+        if _is_error_sentinel(raw):
+            return int(raw[0].Tick), []
+        for tm in raw:
+            t, c1, c2, c3, c4 = _digmark_fields(tm)
+            text = tm.GetString()
             results.append(CEDTextMark(time=t, code1=c1, code2=c2,
                                        code3=c3, code4=c4, data=str(text)))
     else:

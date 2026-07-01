@@ -31,9 +31,9 @@ import os
 import errno
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 import platform
-import importlib
+import importlib.util
 
 # Third Party
 #------------------------------
@@ -199,13 +199,15 @@ class File():
         if all(x == 0 for x in temp):
             self.start_datetime = None
         else:
-            # self.ffi.time_date returns a fixed 6-element tuple in the reverse
-            # of datetime()'s argument order. Indexing explicitly (instead
-            # of datetime(*reversed(temp))) keeps this type-checkable once
-            # self.ffi is typed, since datetime() rejects an unpacked
-            # variable-length iterable.
+            # self.ffi.time_date returns a fixed 7-element tuple in the order
+            # (hundredths, seconds, minutes, hours, day, month, year). Index
+            # explicitly into it to build datetime(year, month, day, hour,
+            # minute, second); the sub-second "hundredths" field (temp[0]) is
+            # dropped. (datetime() rejects an unpacked variable-length
+            # iterable, so explicit indexing also stays type-checkable once
+            # self.ffi is typed.)
             self.start_datetime = datetime(
-                temp[5], temp[4], temp[3], temp[2], temp[1], temp[0])
+                temp[6], temp[5], temp[4], temp[3], temp[2], temp[1])
         #print(f"    {self.start_datetime}",flush=True)
     
         #print("[8] time_base...")

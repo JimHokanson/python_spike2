@@ -8,9 +8,11 @@ include LICENSE
 recursive-include ced *.pyd
 recursive-include ced *.c
 
-# Native libraries, headers, and MATLAB prototype references
+# Native libraries, headers, and MATLAB prototype references.
+# NOTE: ced/x86 is deliberately excluded. Every prebuilt extension is
+# win_amd64, so a 32-bit interpreter could never load those DLLs; they stay
+# in the repository but are not distributed.
 recursive-include ced/x64 *.dll *.h *.lib *.m
-recursive-include ced/x86 *.dll *.h *.lib *.m
 
 # Do not ship intermediate build artifacts.
 # NOTE: do NOT use the usual "*.py[cod]" pattern here -- the [cod] class also

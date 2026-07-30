@@ -2,32 +2,34 @@
 """
 ffi_sonpy.py
 ============
-A *drop-in* replacement for ``ced/ffi.py`` that is backed by CED's official
+A *drop-in* replacement for ``ced/ffi_ceds64.py`` that is backed by CED's official
 **sonpy** package (https://pypi.org/project/sonpy/) instead of the compiled
 ``ceds64int`` DLL + cffi extension.
 
 Why this exists
 ---------------
-The original ``ffi.py`` wraps the native SON64 DLL through a hand-built cffi
+The original ``ffi_ceds64.py`` wraps the native SON64 DLL through a hand-built cffi
 extension. That path is Windows-only and requires the prebuilt ``.pyd`` files
 shipped in the package. ``sonpy`` is CED's own cross-platform binding (Windows,
 macOS, Linux) and so makes a convenient *second* backend.
 
 This module exposes the **same public names, signatures and return shapes** as
-``ffi.py`` so that ``main.py`` can use it unchanged::
+``ffi_ceds64.py``, so ``main.py`` treats the two as interchangeable modules and
+picks one at runtime::
 
-    # in ced/main.py, swap:
-    #     from . import ffi
-    # for:
-    #     from . import ffi_sonpy as ffi
+    ced.read_file(path, backend="sonpy")     # -> this module
+    ced.read_file(path, backend="ceds64")    # -> ffi_ceds64
+    ced.read_file(path)                      # -> first one available
 
-(or set an environment toggle -- see the bottom of this file).
+See ``_get_backend()`` in main.py. Note the two are interchangeable only for
+what main.py needs: ``edit_marker``, ``write_ext_marks``, ``extra_data`` and
+the ``mask_*`` functions exist in ffi_ceds64.py and have no equivalent here.
 
 ------------------------------------------------------------------------------
 HOW THE TRANSLATION WAS DONE  (read this!)
 ------------------------------------------------------------------------------
 This file was written by translating the documented sonpy 1.9.5 API (the man
-pages / ``SonPy.pdf`` shipped inside the wheel) onto the ``ffi.py`` contract.
+pages / ``SonPy.pdf`` shipped inside the wheel) onto the ``ffi_ceds64.py`` contract.
 The mapping was reasoned from documentation and the bundled example scripts
 (``MakeFile.py``, ``ReadFile.py``, ``ReadWave.py``); it has **not** been run
 end-to-end here. Anything that could not be 100% pinned down from the docs is
@@ -36,28 +38,29 @@ marked ``# VERIFY:`` so it is easy to find and confirm against a live install.
 Key structural differences between the two APIs and how they are bridged:
 
 1. OBJECT vs HANDLE.
-   sonpy is object-oriented: ``f = sonpy.SonFile(path, True)``. ``ffi.py``
+   sonpy is object-oriented: ``f = sonpy.SonFile(path, True)``. ``ffi_ceds64.py``
    uses an *integer* file handle. We keep a small registry mapping an int
    handle -> SonFile object so the ``fhand: int`` contract is preserved.
    ``open()`` returns a positive int on success or a negative error code.
 
 2. CHANNEL NUMBERING.
-   The native DLL / ``ffi.py`` use **1-based** channel numbers (``main.py``
+   The native DLL / ``ffi_ceds64.py`` use **1-based** channel numbers (``main.py``
    loops ``range(1, n_chans + 1)``). sonpy uses **0-based** channel numbers
    (``ReadFile.py`` loops ``range(MaxChannels())`` and prints ``i + 1``).
    Every channel-taking function here therefore calls sonpy with ``chan - 1``.
 
 3. WAVEFORM READS + GAPS.
-   ``ffi.read_wave_s`` returns ``(n_read, data, t_first)`` and -- per the
-   comments in ``main.py`` -- the DLL returns data only up to the next gap,
-   which ``main.py`` relies on to split a channel into WaveformSegments.
-   sonpy's ``ReadInts``/``ReadFloats`` instead **read straight across gaps**
-   ("If there are gaps ... it will simply be passed over") and return only the
-   data array (no first-tick). We recover the first tick with ``FirstTime()``.
-   => For files WITHOUT internal gaps/pauses this is exactly equivalent.
-   => For files WITH gaps this backend collapses the gap (one segment instead
-      of several). See ``read_wave_s`` for the full note. This is the single
-      most important behavioural caveat of the sonpy backend.
+   ``ffi_ceds64.read_wave_s`` returns ``(n_read, data, t_first)``; the DLL
+   returns data only up to the next gap, which ``main.py`` relies on to split
+   a channel into WaveformSegments. sonpy's ``ReadInts``/``ReadFloats`` return
+   only the data array, so we recover the first tick with ``FirstTime()``.
+
+   The sonpy docs suggest a read "will simply be passed over" a gap, which
+   would collapse a paused recording into one segment. Measured against
+   sonpy 1.9.12 that is NOT what happens: reading Demo1.smr (6 segments of
+   1200 samples, separated by pauses) returns 1200 samples and stops at the
+   first gap, exactly as the DLL does. test_backend_parity.py asserts the two
+   backends agree on segment count and content for that file.
 
 4. NEW vs OLD sonpy import path.
    sonpy <= 1.9.5 exposed the library as ``sonpy.lib`` (``from sonpy import
@@ -178,7 +181,7 @@ def _get(fhand: int):
 def _max_tick(sonfile) -> int:
     """
     A safe 'read to the end' upper bound in ticks. sonpy read functions take a
-    tUpto; ffi.py uses t_to == -1 to mean 'to the end'. We translate that to
+    tUpto; ffi_ceds64.py uses t_to == -1 to mean 'to the end'. We translate that to
     the largest legal 64-bit tick (or, failing that, the file's max time + 1).
     """
     try:
@@ -191,7 +194,7 @@ def _max_tick(sonfile) -> int:
 
 
 def _resolve_tupto(sonfile, t_to: int) -> int:
-    """ffi.py convention: t_to < 0 means 'to the end'."""
+    """ffi_ceds64.py convention: t_to < 0 means 'to the end'."""
     return _max_tick(sonfile) if t_to is None or t_to < 0 else int(t_to)
 
 
@@ -241,7 +244,7 @@ def open(filename: str, mode: int = 1) -> int:
     """
     Open an existing SON file.
 
-    ffi.py ``mode``:  1 = read-only, 0 = read/write, -1 = try r/w then r-o.
+    ffi_ceds64.py ``mode``:  1 = read-only, 0 = read/write, -1 = try r/w then r-o.
     sonpy constructor: ``SonFile(sName, bReadOnly, flags=OpenFlags.None)``.
 
     Returns a positive handle or a negative error code.
@@ -353,7 +356,7 @@ def ticks_to_secs(fhand: int, ticks) -> Union[float, np.ndarray]:
 def get_free_chan(fhand: int) -> int:
     """
     Lowest unused channel number. sonpy ``GetFreeChannel`` is 0-based; we add 1
-    to return a 1-based channel to match the rest of this (ffi.py) interface.
+    to return a 1-based channel to match the rest of this (ffi_ceds64.py) interface.
     """
     return int(_get(fhand).GetFreeChannel()) + 1
 
@@ -363,7 +366,7 @@ def file_comment(fhand: int, index: int,
     """
     Get (and optionally set) a file comment.
 
-    ffi.py / main.py use 1-based comment indices (main.py reads 1..8). sonpy is
+    ffi_ceds64.py / main.py use 1-based comment indices (main.py reads 1..8). sonpy is
     0-based (MakeFile.py uses ``SetFileComment(0, ...)``) so we pass index - 1.
     """
     sonfile = _get(fhand)
@@ -384,7 +387,7 @@ def time_date(fhand: int, new_time_date=None):
     Get (or set) the file start time/date.
 
     Returns a tuple ``(hundredths, seconds, minutes, hours, day, month, year)``
-    -- the same order ``ffi.py`` documents. sonpy ``GetTimeDate()`` returns a
+    -- the same order ``ffi_ceds64.py`` documents. sonpy ``GetTimeDate()`` returns a
     vector<uint16_t> built from the native ``TTimeDate`` struct, whose field
     order is hun, sec, min, hour, day, mon, year -- i.e. identical. We pass it
     through unchanged.
@@ -396,7 +399,7 @@ def time_date(fhand: int, new_time_date=None):
     sonfile = _get(fhand)
     if new_time_date is None:
         vals = list(sonfile.GetTimeDate())
-        # Pad/truncate to the 7-tuple ffi.py promises.
+        # Pad/truncate to the 7-tuple ffi_ceds64.py promises.
         vals = (list(vals) + [0] * 7)[:7]
         return tuple(int(v) for v in vals)
     else:
@@ -411,7 +414,7 @@ def app_id(fhand: int, new_app_id=None) -> Tuple[int, ...]:
     """
     Get (and optionally set) the 8-byte application ID.
 
-    Returns a tuple of 8 uint8 values (matching ffi.py). sonpy stores the
+    Returns a tuple of 8 uint8 values (matching ffi_ceds64.py). sonpy stores the
     AppID as a string (``GetAppID`` / ``SetAppID``), so we encode/decode the
     bytes. # VERIFY: encoding of non-ASCII app-id bytes.
     """
@@ -433,7 +436,7 @@ def app_id(fhand: int, new_app_id=None) -> Tuple[int, ...]:
 
 # -- Channel properties ---------------------------------------------
 #
-# Reminder: every `chan` argument below is 1-based (ffi.py convention) and is
+# Reminder: every `chan` argument below is 1-based (ffi_ceds64.py convention) and is
 # translated to sonpy's 0-based numbering via `chan - 1`.
 
 def chan_type(fhand: int, chan: int) -> ChanType:
@@ -546,6 +549,22 @@ def chan_max_time(fhand: int, chan: int) -> int:
     return int(_get(fhand).ChannelMaxTime(chan - 1))
 
 
+def chan_first_time(fhand: int, chan: int, t_from: int = 0,
+                    t_to: int = -1) -> int:
+    """
+    Tick of the first item at or after *t_from*, or -1 if the channel holds
+    no data in the range. sonpy exposes this directly as ``FirstTime``.
+
+    Deliberately NOT implemented as a one-sample ``read_wave_s``: a single
+    negative sample value is indistinguishable from sonpy's negative error
+    sentinel (see _looks_like_error_array).
+    """
+    sonfile = _get(fhand)
+    tupto = _resolve_tupto(sonfile, t_to)
+    t = int(sonfile.FirstTime(chan - 1, int(t_from), tupto))
+    return t if t >= 0 else -1
+
+
 def chan_y_range(fhand: int, chan: int,
                  new_low: Optional[float] = None,
                  new_high: Optional[float] = None) -> Tuple[float, float]:
@@ -575,7 +594,7 @@ def get_ext_mark_info(fhand: int, chan: int) -> Tuple[int, int, int]:
     Return ``(pre_alignment_points, rows, cols)`` for extended markers.
 
     NOTE the reordering: sonpy ``GetExMarkInfo`` returns ``[nRows, nCols, nPre]``
-    whereas ffi.py returns ``(pre, rows, cols)``.
+    whereas ffi_ceds64.py returns ``(pre, rows, cols)``.
     """
     info = list(_get(fhand).GetExMarkInfo(chan - 1))
     info = (list(info) + [0, 0, 0])[:3]
@@ -589,7 +608,7 @@ def prev_n_time(fhand: int, chan: int, t_from: int, t_to: int = 0,
     Time of the N-th item before ``t_from`` (and at/after ``t_to``), or -1.
 
     sonpy: ``PreviousNTime(chan, trStart, trEnd=0, n=1, bAsWave=False, Filter)``.
-    The ffi.py ``mask`` argument has no plain sonpy equivalent (sonpy uses a
+    The ffi_ceds64.py ``mask`` argument has no plain sonpy equivalent (sonpy uses a
     MarkerFilter object); we ignore it and use sonpy's default filter.
     """
     return int(_get(fhand).PreviousNTime(
@@ -624,7 +643,7 @@ def set_event_chan(fhand: int, chan: int, rate: float,
 
 def set_marker_chan(fhand: int, chan: int, rate: float, kind: int = 5) -> int:
     """
-    Create a marker channel. ffi.py ``kind`` 5=marker, 4=level(EventBoth).
+    Create a marker channel. ffi_ceds64.py ``kind`` 5=marker, 4=level(EventBoth).
     sonpy has a dedicated ``SetMarkerChannel``; a 'level' channel is just an
     EventBoth event channel.
     """
@@ -657,7 +676,7 @@ def set_ext_mark_chan(fhand: int, chan: int, rate: float,
                       cols: int = 1, t_div: int = 0) -> int:
     """
     Create an extended marker channel.
-    ffi.py ``ext_type``: 1=AdcMark(WaveMark), 2=RealMark, 3=TextMark.
+    ffi_ceds64.py ``ext_type``: 1=AdcMark(WaveMark), 2=RealMark, 3=TextMark.
     sonpy splits these into separate constructors.
     """
     sonfile = _get(fhand)
@@ -708,7 +727,7 @@ def read_wave_f(fhand: int, chan: int, n_max: int, t_from: int,
     Read waveform data as float32 (scaled to user units by sonpy).
     Returns ``(n_read, float32_array, first_time_ticks)``.
 
-    See ``read_wave_s`` for the gap-handling caveat (it applies here too).
+    See ``read_wave_s`` for how gaps are handled (the same applies here).
     """
     sonfile = _get(fhand)
     tupto = _resolve_tupto(sonfile, t_to)
@@ -736,20 +755,15 @@ def read_wave_s(fhand: int, chan: int, n_max: int, t_from: int,
         ``FirstTime(chan, t_from, t_upto)`` which returns the time of the first
         data point at/after t_from.
 
-    GAP CAVEAT (important):
+    GAPS:
         The native DLL returns samples only up to the next gap/pause, and
         main.py loops on that to build one WaveformSegment per contiguous run.
-        sonpy's ReadInts reads *straight across* gaps and concatenates, with no
-        signal of where a gap was. Consequences:
-          * No gaps in the file  -> identical result to the DLL backend.
-          * Gaps present         -> this backend returns a single concatenated
-            block, so main.py produces ONE segment whose later sample times are
-            computed as if contiguous (i.e. the pause is silently removed).
-        If faithful multi-segment behaviour over gapped files is required, the
-        contiguous runs must be discovered explicitly (e.g. by walking the
-        channel with FirstTime/PreviousNTime and the channel divide). That is
-        left as a follow-up because it needs validation against real gapped
-        files.  # VERIFY: gap handling against a file with pauses.
+        sonpy behaves the same way, despite documentation implying a read is
+        "passed over" a gap. Verified against sonpy 1.9.12 with Demo1.smr
+        (6 paused segments of 1200 samples): a full-channel read returns 1200
+        and stops at the first gap, matching the DLL exactly. Both backends
+        therefore produce the same segment list, which
+        test_backend_parity.py asserts.
     """
     sonfile = _get(fhand)
     tupto = _resolve_tupto(sonfile, t_to)
@@ -967,24 +981,6 @@ def read_ext_marks(
 
 
 # ---------------------------------------------------------------------------
-# Optional: a convenience so callers can pick the backend without editing
-# main.py's import line. main.py does `from . import ffi`. If you instead make
-# main.py do:
-#
-#     from . import backend as ffi
-#
-# you can have ced/backend.py choose at runtime, e.g.:
-#
-#     import os
-#     if os.environ.get("SPIKE2_BACKEND", "dll").lower() == "sonpy":
-#         from .ffi_sonpy import *      # noqa: F401,F403
-#         from .ffi_sonpy import (ChanType, CEDMarker, CEDTextMark,
-#                                 CEDRealMark, CEDWaveMark)
-#     else:
-#         from .ffi import *            # noqa: F401,F403
-#         from .ffi import (ChanType, CEDMarker, CEDTextMark,
-#                           CEDRealMark, CEDWaveMark)
-#
-# (a `from module import *` does not re-export names starting with "_", which
-# is fine here because the public API does not.)
+# Backend selection lives in main.py (_get_backend / read_file's `backend`
+# argument), not here. Nothing needs to import this module directly.
 # ---------------------------------------------------------------------------

@@ -44,73 +44,99 @@ import xml.etree.ElementTree as ET
 
 
 # ---------------------------------------------------------------------------
+# Attribute helpers
+# ---------------------------------------------------------------------------
+# MATLAB reads these files with readstruct(), which converts numeric XML
+# attributes to doubles and leaves absent ones as NaN. The equivalent here is
+# a float or None -- None rather than NaN so that a missing cursor position
+# cannot propagate silently through arithmetic.
+
+def _attr(d: dict, *names: str):
+    """
+    First present value among *names*, checking both the bare attribute
+    name and the '@'-prefixed form produced by _elem_to_dict().
+    """
+    for name in names:
+        for key in (name, f"@{name}"):
+            if key in d and d[key] is not None:
+                return d[key]
+    return None
+
+
+def _as_float(value) -> Optional[float]:
+    """Numeric attribute value, or None if absent/unparseable."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def _elem_attrib(elem: ET.Element) -> dict:
+    """Attributes of *elem*, plus any child elements keyed by tag."""
+    d: dict = dict(elem.attrib)
+    for child in elem:
+        d[child.tag] = child.text
+    return d
+
+
+# ---------------------------------------------------------------------------
 # s2rx.VCur  –  Vertical (time-axis) cursor
 # ---------------------------------------------------------------------------
 
 @dataclass
 class VCur:
     """
-    Represents a vertical cursor stored in the XInfo block of a .s2rx file.
+    One vertical cursor from the XInfo block of a .s2rx file.
+
+    This is the Python equivalent of a single row of the table held by
+    MATLAB's ``ced.s2rx.xinfo.Vcursor``; the list of them on
+    :class:`XInfo` is the whole table. Every field is the parsed numeric
+    attribute value, or None when the attribute is absent.
 
     Attributes
     ----------
-    id : str
-        Cursor identifier (attribute on the XML element).
-    lab_mode : Optional[str]
+    id : Optional[float]
+        Cursor identifier.
+    lab_mode : Optional[float]
         Label display mode.
-    lab_pos : Optional[str]
-        Label position.
-    num : Optional[str]
+    lab_pos : Optional[float]
+        Label placement along the axis, as a fraction. NOT a time --
+        this is where the label is drawn, and is typically 0.2.
+    num : Optional[float]
         Cursor number / index.
-    a_mod : Optional[str]
+    pos : Optional[float]
+        Cursor position in seconds. This is the cursor's time.
+    a_mode : Optional[float]
         Amplitude mode.
-    data : Optional[float]
-        Parsed numeric position of the cursor (seconds).  Derived from
-        LabPos when it contains a float string, or from Num; the exact
-        field used depends on what the file contains.
     """
 
-    id: str = ""
-    lab_mode: Optional[str] = None
-    lab_pos: Optional[str] = None
-    num: Optional[str] = None
-    a_mod: Optional[str] = None
-    data: Optional[float] = None
+    id: Optional[float] = None
+    lab_mode: Optional[float] = None
+    lab_pos: Optional[float] = None
+    num: Optional[float] = None
+    pos: Optional[float] = None
+    a_mode: Optional[float] = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "VCur":
-        """
-        Construct a VCur from a dictionary of XML attributes/child-element
-        values (keys are the XML attribute / element names).
-
-        The MATLAB code accesses ``x_info.vcursor.data``, so we try to
-        populate ``data`` from any numeric field available.
-        """
-        obj = cls()
-        obj.id = str(d.get("id", d.get("@id", "")))
-        obj.lab_mode = d.get("LabMode")
-        obj.lab_pos = d.get("LabPos")
-        obj.num = d.get("Num")
-        obj.a_mod = d.get("AMod")
-
-        # Try to derive a float 'data' value from LabPos, then Num.
-        for candidate_key in ("LabPos", "Num"):
-            val = d.get(candidate_key)
-            if val is not None:
-                try:
-                    obj.data = float(val)
-                    break
-                except (ValueError, TypeError):
-                    pass
-        return obj
+        """Construct a VCur from a dict of XML attribute values."""
+        return cls(
+            id=_as_float(_attr(d, "id")),
+            lab_mode=_as_float(_attr(d, "LabMode")),
+            lab_pos=_as_float(_attr(d, "LabPos")),
+            num=_as_float(_attr(d, "Num")),
+            pos=_as_float(_attr(d, "Pos")),
+            # MATLAB reads 'AMode'; the schema comment below says 'AMod'.
+            # Neither appears in any example file, so accept both.
+            a_mode=_as_float(_attr(d, "AMode", "AMod")),
+        )
 
     @classmethod
     def from_xml_element(cls, elem: ET.Element) -> "VCur":
         """Construct a VCur from an xml.etree.ElementTree Element."""
-        d: dict = dict(elem.attrib)
-        for child in elem:
-            d[child.tag] = child.text
-        return cls.from_dict(d)
+        return cls.from_dict(_elem_attrib(elem))
 
 
 # ---------------------------------------------------------------------------
@@ -120,49 +146,45 @@ class VCur:
 @dataclass
 class HCur:
     """
-    Represents a horizontal cursor stored in the XInfo block.
+    One horizontal cursor from the XInfo block.
+
+    Has no counterpart in the MATLAB library, which only models vertical
+    cursors; the field conventions follow :class:`VCur`.
 
     Attributes
     ----------
-    id : str
+    id : Optional[float]
         Cursor identifier.
     pos : Optional[float]
-        Vertical position (amplitude units).
-    lab_mode : Optional[str]
+        Cursor position in the channel's amplitude units.
+    lab_mode : Optional[float]
         Label display mode.
-    lab_pos : Optional[str]
-        Label position.
-    num : Optional[str]
+    lab_pos : Optional[float]
+        Label placement along the axis, as a fraction (not an amplitude).
+    num : Optional[float]
         Cursor number / index.
     """
 
-    id: str = ""
+    id: Optional[float] = None
     pos: Optional[float] = None
-    lab_mode: Optional[str] = None
-    lab_pos: Optional[str] = None
-    num: Optional[str] = None
+    lab_mode: Optional[float] = None
+    lab_pos: Optional[float] = None
+    num: Optional[float] = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "HCur":
-        obj = cls()
-        obj.id = str(d.get("id", d.get("@id", "")))
-        obj.lab_mode = d.get("LabMode")
-        obj.lab_pos = d.get("LabPos")
-        obj.num = d.get("Num")
-        pos_str = d.get("Pos")
-        if pos_str is not None:
-            try:
-                obj.pos = float(pos_str)
-            except (ValueError, TypeError):
-                pass
-        return obj
+        """Construct an HCur from a dict of XML attribute values."""
+        return cls(
+            id=_as_float(_attr(d, "id")),
+            pos=_as_float(_attr(d, "Pos")),
+            lab_mode=_as_float(_attr(d, "LabMode")),
+            lab_pos=_as_float(_attr(d, "LabPos")),
+            num=_as_float(_attr(d, "Num")),
+        )
 
     @classmethod
     def from_xml_element(cls, elem: ET.Element) -> "HCur":
-        d: dict = dict(elem.attrib)
-        for child in elem:
-            d[child.tag] = child.text
-        return cls.from_dict(d)
+        return cls.from_dict(_elem_attrib(elem))
 
 
 # ---------------------------------------------------------------------------
@@ -177,19 +199,20 @@ class XInfo:
     The XInfo block holds vertical cursors (VCur), active channel (ActC)
     and horizontal cursors (HCur).
 
+    ``vcursors`` is the equivalent of MATLAB's ``x_info.vcursor.data``
+    table: one entry per cursor rather than one table with a row each.
+    An empty list means the file declared no cursors of that kind.
+
     Attributes
     ----------
-    vcursor : Optional[VCur]
-        The first vertical cursor, if present.
     vcursors : list[VCur]
-        All vertical cursors.
+        All vertical cursors, in document order.
     act_c : Optional[str]
         Active channel id (from ActC element).
     hcursors : list[HCur]
-        All horizontal cursors.
+        All horizontal cursors, in document order.
     """
 
-    vcursor: Optional[VCur] = None
     vcursors: list = field(default_factory=list)
     act_c: Optional[str] = None
     hcursors: list = field(default_factory=list)
@@ -205,15 +228,15 @@ class XInfo:
         """
         obj = cls()
 
-        # ---- vertical cursors ----------------------------------------
-        vcur_raw = d.get("VCur")
-        if vcur_raw is not None:
-            # May be a single dict or a list of dicts.
-            if isinstance(vcur_raw, list):
-                obj.vcursors = [VCur.from_dict(v) for v in vcur_raw]
-            else:
-                obj.vcursors = [VCur.from_dict(vcur_raw)]
-            obj.vcursor = obj.vcursors[0] if obj.vcursors else None
+        def _as_list(raw):
+            # A single occurrence comes through as one dict, several as
+            # a list of dicts.
+            if raw is None:
+                return []
+            return raw if isinstance(raw, list) else [raw]
+
+        obj.vcursors = [VCur.from_dict(v) for v in _as_list(d.get("VCur"))]
+        obj.hcursors = [HCur.from_dict(h) for h in _as_list(d.get("HCur"))]
 
         # ---- active channel ------------------------------------------
         act_c_raw = d.get("ActC")
@@ -223,14 +246,6 @@ class XInfo:
             else:
                 obj.act_c = str(act_c_raw)
 
-        # ---- horizontal cursors --------------------------------------
-        hcur_raw = d.get("HCur")
-        if hcur_raw is not None:
-            if isinstance(hcur_raw, list):
-                obj.hcursors = [HCur.from_dict(h) for h in hcur_raw]
-            else:
-                obj.hcursors = [HCur.from_dict(hcur_raw)]
-
         return obj
 
     @classmethod
@@ -238,21 +253,13 @@ class XInfo:
         """Construct an XInfo by parsing an xml.etree.ElementTree Element."""
         obj = cls()
 
-        # ---- vertical cursors ----------------------------------------
-        vcur_elems = elem.findall("VCur")
-        if vcur_elems:
-            obj.vcursors = [VCur.from_xml_element(e) for e in vcur_elems]
-            obj.vcursor = obj.vcursors[0]
+        obj.vcursors = [VCur.from_xml_element(e) for e in elem.findall("VCur")]
+        obj.hcursors = [HCur.from_xml_element(e) for e in elem.findall("HCur")]
 
         # ---- active channel ------------------------------------------
         act_c_elem = elem.find("ActC")
         if act_c_elem is not None:
             obj.act_c = act_c_elem.get("id", act_c_elem.text)
-
-        # ---- horizontal cursors --------------------------------------
-        hcur_elems = elem.findall("HCur")
-        if hcur_elems:
-            obj.hcursors = [HCur.from_xml_element(e) for e in hcur_elems]
 
         return obj
 
@@ -365,46 +372,33 @@ class S2rxFile:
 
     def get_vertical_cursor_positions(self) -> list:
         """
-        Return the numeric positions of all vertical cursors.
+        Return the times of all vertical cursors, in seconds.
 
-        Mirrors MATLAB::
-
-            function t = getVerticalCursorPositions(obj)
-                t = [];
-                if ~isempty(obj.x_info) && ~isempty(obj.x_info.vcursor)
-                    t = obj.x_info.vcursor.data;
-                end
-            end
+        Counterpart of MATLAB's ``getVerticalCursorPositions``, which
+        returns the whole ``vcursor.data`` table. Here the table itself is
+        ``self.x_info.vcursors``, so this method returns just the ``Pos``
+        column -- what its name promises.
 
         Returns
         -------
         list of float
-            Cursor positions in seconds, or an empty list if none are
-            found.  In the MATLAB code only ``vcursor`` (the first cursor)
-            is returned; this Python version returns all cursor positions
-            to be more useful, but the first element matches the MATLAB
-            behaviour.
+            Cursor times in seconds. Cursors with no Pos attribute are
+            omitted; an empty list means there are no vertical cursors.
         """
         if self.x_info is None:
             return []
-        if self.x_info.vcursor is None:
-            return []
-
-        # Return the data value of every vertical cursor (not just the
-        # first), filtering out None.
-        positions = [
-            c.data for c in self.x_info.vcursors if c.data is not None
-        ]
-        return positions
+        return [c.pos for c in self.x_info.vcursors if c.pos is not None]
 
     def get_horizontal_cursor_positions(self) -> list:
         """
-        Return the numeric positions (amplitudes) of all horizontal cursors.
+        Return the positions of all horizontal cursors, in the amplitude
+        units of the channel they sit on.
 
         Returns
         -------
         list of float
-            Cursor positions, or an empty list.
+            Cursor positions. Cursors with no Pos attribute are omitted;
+            an empty list means there are no horizontal cursors.
         """
         if self.x_info is None:
             return []
@@ -412,9 +406,10 @@ class S2rxFile:
 
     def __repr__(self) -> str:
         vcur_count = len(self.x_info.vcursors) if self.x_info else 0
+        hcur_count = len(self.x_info.hcursors) if self.x_info else 0
         return (
             f"S2rxFile(file_path={self.file_path!r}, "
-            f"vcursors={vcur_count})"
+            f"vcursors={vcur_count}, hcursors={hcur_count})"
         )
 
 

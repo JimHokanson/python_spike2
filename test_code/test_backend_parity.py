@@ -86,7 +86,7 @@ def _have_backend(backend: str) -> bool:
         if backend == "sonpy":
             import sonpy  # noqa: F401
             return True
-        from ced import ffi  # noqa: F401  (the ceds64 cffi extension)
+        from ced import ffi_ceds64  # noqa: F401  (the ceds64 cffi extension)
         return True
     except Exception:
         return False
@@ -281,8 +281,9 @@ def compare_file(path):
         # ---- Extended markers ----------------------------------------
         # TextMark: full parity (time, codes, text).
         for ta, tb in zip(fa.text_markers, fb.text_markers):
-            na, ma_ = ta.get_data()
-            nb, mb_ = tb.get_data()
+            ra, rb = ta.get_data(), tb.get_data()
+            na, ma_ = ra.n_events, ra.markers
+            nb, mb_ = rb.n_events, rb.markers
             _eq_scalar(diffs, f"text[{ta.name}].n", na, nb)
             _eq_array(diffs, f"text[{ta.name}].times",
                       [m.time for m in ma_], [m.time for m in mb_])
@@ -297,8 +298,9 @@ def compare_file(path):
         # assert the timestamps and codes match and do NOT compare .data.
         for ma, mb in zip(fa.real_markers + fa.wave_markers,
                           fb.real_markers + fb.wave_markers):
-            na, la_ = ma.get_data()
-            nb, lb_ = mb.get_data()
+            ra, rb = ma.get_data(), mb.get_data()
+            na, la_ = ra.n_events, ra.markers
+            nb, lb_ = rb.n_events, rb.markers
             _eq_scalar(diffs, f"extmark[{ma.name}].n", na, nb)
             _eq_array(diffs, f"extmark[{ma.name}].times",
                       [m.time for m in la_], [m.time for m in lb_])

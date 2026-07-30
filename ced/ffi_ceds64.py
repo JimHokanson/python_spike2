@@ -517,6 +517,25 @@ def chan_max_time(fhand: int, chan: int) -> int:
     return lib.S64ChanMaxTime(fhand, chan)
 
 
+def chan_first_time(fhand: int, chan: int, t_from: int = 0,
+                    t_to: int = -1) -> int:
+    """
+    Tick of the first waveform sample at or after *t_from*, or -1 if the
+    channel holds no data in the range.
+
+    The SON64 API has no dedicated call for this, so read a single point
+    and report the tick it came back with. There is no counterpart in
+    CEDS64ML; it exists because a waveform channel does not necessarily
+    start at tick 0 and callers need that offset to place samples in time.
+    """
+    buf = ffi.new("short[1]")
+    t_first = ffi.new("long long *")
+    n_read = lib.S64ReadWaveS(fhand, chan, buf, 1, t_from, t_to, t_first, -1)
+    if n_read <= 0:
+        return -1
+    return t_first[0]
+
+
 def chan_y_range(fhand: int, chan: int,
                 new_low: Optional[float] = None,
                 new_high: Optional[float] = None) -> Tuple[float, float]:

@@ -10,8 +10,8 @@ Work on this code was supported by a grant from the NIH NIDDK ([grant: R21DK1406
 
 CED provides an official Python package, [sonpy](https://pypi.org/project/sonpy/), but on its own it has limitations:
 
-- Narrow platform/version coverage — as of 1.9.12 the macOS and Linux wheels are built for CPython 3.14 only
-- Poor data retrieval on macOS (returns lists instead of NumPy arrays)
+- Narrow platform/version coverage — as of 1.9.12 (June 2026) the macOS and Linux wheels are built for CPython 3.14 only
+- Older versions of sonpy may appear to have better coverage but were buggy
 
 `spike2io` provides a consistent, NumPy-based interface on top of *two* interchangeable backends, so you get the same API whichever one is available:
 
@@ -243,7 +243,7 @@ with ced.read_file("my_recording.smrx") as f:
 
 ---
 
-### Vertical cursor positions
+### Cursor positions
 
 Spike2 stores cursor positions in a `.s2rx` sidecar file next to the recording. When one is present it is parsed automatically and exposed as `f.meta_file`:
 
@@ -256,6 +256,8 @@ with ced.read_file("Demo_Jim.smrx") as f:
 ```
 
 Positions are in seconds. A cursor that was never moved has no stored position and is omitted, so a file whose cursors are all untouched returns an empty list. `f.meta_file` is `None` when there is no `.s2rx` file.
+
+**Note, this functionality is undocumented by CED. The .s2rx file is a XML file, so it is easy to read. However, the behavior of the components is not documented** There may be other features that could be extracted from this file ....
 
 ---
 
@@ -301,7 +303,7 @@ This package is the Python counterpart of [matlab_spike2](https://github.com/Neu
 - **WaveMark / RealMark / TextMark** channels are read, but on the `sonpy` backend the numeric sample payload is unavailable — sonpy 1.9.12 exposes no attribute for it, so `.data` comes back empty. Timestamps and codes are correct on both backends.
 - **MATLAB's `return_format` options** for both-edge event channels (`'time_series1'`, `'time_series2'`, `'switch_times'`, `'starts_and_stops'`) are not yet ported. Python returns transition times and a starting level, equivalent to MATLAB's default `'times'`.
 - **Writing files** is available through the backend modules but is not covered by the high-level API.
-- Some example files (`example1.smr`, `example2.smr`) cannot be opened by the bundled `ceds64` backend, which returns error −13. They read correctly with `backend="sonpy"`.
+- Some example files (`example1.smr`, `example2.smr`) cannot be opened by the bundled `ceds64` backend, which returns error −13. They read correctly with `backend="sonpy"`. Unfortunately I have no idea why this is :/
 - There are limited error checks on low-level DLL return codes.
 
 ---

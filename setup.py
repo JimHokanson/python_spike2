@@ -41,6 +41,7 @@ those DLLs. The files stay in the repository for anyone who later builds a
 
 import os
 import re
+import shutil
 from pathlib import Path
 
 from setuptools import find_packages, setup
@@ -55,6 +56,19 @@ if WHEEL not in ("windows", "any"):
     raise SystemExit(
         f"SPIKE2IO_WHEEL must be 'windows' or 'any', got {WHEEL!r}")
 WINDOWS_WHEEL = WHEEL == "windows"
+
+# setuptools stages files into build/lib and never removes ones that a later
+# build no longer selects. Building the 'any' wheel after the Windows wheel
+# would therefore silently pick up the leftover .pyd files and DLLs and ship
+# Windows binaries to macOS/Linux users. Drop the staged copy whenever the
+# target changes, so the two builds cannot contaminate each other.
+_BUILD = HERE / "build"
+_STAMP = _BUILD / ".spike2io-wheel-target"
+_previous = _STAMP.read_text().strip() if _STAMP.is_file() else None
+if _previous is not None and _previous != WHEEL:
+    shutil.rmtree(_BUILD / "lib", ignore_errors=True)
+_BUILD.mkdir(exist_ok=True)
+_STAMP.write_text(WHEEL)
 
 
 def read_long_description() -> str:

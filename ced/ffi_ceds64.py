@@ -714,14 +714,14 @@ def set_text_mark_chan(fhand: int, chan: int, rate: float,
 
 
 def set_ext_mark_chan(fhand: int, chan: int, rate: float,
-                     ext_type: int = 1, rows: int = 1,
+                     ext_type: int = 6, rows: int = 1,
                      cols: int = 1, t_div: int = 0) -> int:
     """
     Create an extended marker channel.
-    ext_type: 
-        1=AdcMark
-        2=RealMark
-        3=TextMark.
+    ext_type: the channel kind (other values return -22)
+        6=AdcMark (WaveMark): rows = points per trace, cols = traces
+        7=RealMark
+        8=TextMark.
     
     
     %   Inputs
@@ -1131,8 +1131,9 @@ def read_ext_marks(
                                      cursor, t_upto, mask)
             if n <= 0:
                 break
-            arr = (_np_from_buf(sbuf, np.int16, n_shorts)
-                   .reshape(cols, rows).T.copy())
+            # The DLL returns the traces interleaved (point 0 of every
+            # trace, then point 1, ...), so this gives points x traces.
+            arr = _np_from_buf(sbuf, np.int16, n_shorts).reshape(rows, cols)
             mk = CEDWaveMark(
                 time=cm.m_Time,
                 code1=cm.m_Code1, code2=cm.m_Code2,

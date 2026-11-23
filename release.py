@@ -162,7 +162,21 @@ def make_venv(tmp: Path) -> Path:
 
 def build_all(py: Path, version: str) -> None:
     step("Building artifacts")
+
+    # On Windows a file that another process holds open cannot be deleted or
+    # overwritten, and rmtree(ignore_errors=True) hides that -- the failure
+    # then surfaces much later as an opaque WinError 5 from the build backend.
+    # Check up front and say what to do about it.
     shutil.rmtree(DIST, ignore_errors=True)
+    if DIST.exists():
+        stuck = [p.name for p in DIST.iterdir()]
+        if stuck:
+            raise Fail(
+                "could not clear dist/ -- these files are held open by "
+                "another process:\n        " + "\n        ".join(stuck) +
+                "\n    Close anything using them (a running twine upload, an "
+                "Explorer\n    or archive-viewer window on dist/, an editor "
+                "tab) and re-run.")
     clean_intermediates()
 
     for target, what in (("windows", "--wheel"),
@@ -208,7 +222,19 @@ def wheel_facts(path: Path) -> dict:
         "requires_python": field(text, "Requires-Python"),
         "version": field(text, "Version"),
         "tag": field(wheel, "Tag"),
+        "metadata_version": field(text, "Metadata-Version"),
     }
+
+
+# Metadata-Version -> the twine release that first understood it. An older
+# twine rejects the upload with InvalidDistribution, listing the versions it
+# does know. This bites because the twine used to *check* here (in this
+# script's venv) is not the twine used to *upload* (whatever is on PATH).
+_TWINE_FOR_METADATA = {"2.4": "6.1.0"}
+
+
+def min_twine_for(metadata_version: str | None) -> str | None:
+    return _TWINE_FOR_METADATA.get(metadata_version or "")
 
 
 def verify(version: str, py: Path) -> None:
@@ -275,6 +301,34 @@ def verify(version: str, py: Path) -> None:
     run([str(py), "-m", "twine", "check", *[str(p) for p in DIST.iterdir()]])
     ok("twine check passed on all three")
 
+    # -- will the twine doing the UPLOAD understand this metadata? ------
+    mv = w["metadata_version"]
+    needed = min_twine_for(mv)
+    if needed is None:
+        ok(f"metadata version {mv}")
+    else:
+        ok(f"metadata version {mv} -- needs twine >= {needed} to upload")
+        for exe, label in ((sys.executable, "this interpreter"),
+                           (shutil.which("twine"), "twine on PATH")):
+            if exe is None:
+                continue
+            cmd = ([exe, "-m", "twine", "--version"] if label != "twine on PATH"
+                   else [exe, "--version"])
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            if proc.returncode != 0:
+                continue
+            found = re.search(r"(\d+\.\d+(?:\.\d+)?)", proc.stdout)
+            if found and _older(found.group(1), needed):
+                warn(f"{label} has twine {found.group(1)}, which will reject "
+                     f"metadata {mv} with InvalidDistribution. "
+                     f"Upgrade: pip install --upgrade twine")
+
+
+def _older(have: str, want: str) -> bool:
+    def parts(v):
+        return tuple(int(x) for x in v.split(".")[:3])
+    return parts(have) < parts(want)
+
 
 # ----------------------------------------------------------------------
 # Entry point
@@ -330,6 +384,10 @@ def main() -> int:
         print(f"    {p.name:46s} {p.stat().st_size / 1e6:5.2f} MB")
     print(f"""
 Nothing has been published. Run these yourself, in this order:
+
+    # 0. the artifacts use Metadata-Version 2.4, which needs twine >= 6.1.
+    #    An older twine fails with InvalidDistribution.
+    py -m pip install --upgrade twine
 
     # 1. dry run on TestPyPI (separate account and token)
     py -m twine upload --repository testpypi dist/*

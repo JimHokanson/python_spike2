@@ -69,7 +69,8 @@ class CEDRealMark(CEDMarker):
 
 @dataclass
 class CEDWaveMark(CEDMarker):
-    """A marker with attached int16 waveform data, shaped as rows × cols."""
+    """A marker with attached int16 waveform data, shaped as rows × cols
+    (points × traces)."""
 
     data: np.ndarray = field(
         default_factory=lambda: np.empty((0, 0), dtype=np.int16)
